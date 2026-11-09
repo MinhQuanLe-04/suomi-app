@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="vi" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SuomiLingQ" />
+  <title>SuomiLingQ – Học Tiếng Phần Qua Bài Đọc</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            suomi: {
+              blue: '#003580',
+              light: '#3b82f6'
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    :root {
+      --reader-font-size: 1.15rem;
+    }
+    * {
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      overscroll-behavior-y: none;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+    }
+    #reader-content {
+      font-size: var(--reader-font-size);
+      line-height: 1.95;
+    }
+    .word-token {
+      display: inline-block;
+      padding: 1px 4px;
+      margin: 1px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.12s ease, transform 0.08s ease;
+      user-select: none;
+    }
+    .word-token:active {
+      transform: scale(0.95);
+    }
+    .word-new {
+      background-color: rgba(59, 130, 246, 0.22);
+      border-bottom: 2px solid rgba(59, 130, 246, 0.55);
+    }
+    .dark .word-new {
+      background-color: rgba(59, 130, 246, 0.28);
+      color: #93c5fd;
+    }
+    .word-learning {
+      background-color: rgba(245, 158, 11, 0.28);
+      border-bottom: 2px solid rgba(245, 158, 11, 0.75);
+    }
+    .dark .word-learning {
+      background-color: rgba(245, 158, 11, 0.32);
+      color: #fde68a;
+    }
+    .word-known {
+      background-color: transparent;
+      border-bottom: 2px solid transparent;
+    }
+    .word-selected {
+      outline: 2px solid #3b82f6;
+      outline-offset: 1px;
+    }
+    #bottom-sheet {
+      will-change: transform;
+      transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+      padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    }
+    .sheet-hidden {
+      transform: translateY(105%);
+    }
+    .sheet-visible {
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen select-none">
+
+  <!-- Thanh điều hướng phía trên -->
+  <header class="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 py-2.5">
+    <div class="max-w-xl mx-auto flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="w-7 h-7 rounded-lg bg-blue-600 text-white font-bold flex items-center justify-center text-sm shadow-sm">FI</span>
+        <div>
+          <h1 class="font-bold text-sm leading-tight">SuomiLingQ</h1>
+          <p id="stats-badge" class="text-[11px] text-slate-500 dark:text-slate-400">0 đang học • 0 đã thuộc</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        <button onclick="adjustFontSize(-0.08)" class="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 active:scale-95">A-</button>
+        <button onclick="adjustFontSize(0.08)" class="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 active:scale-95">A+</button>
+        <button onclick="openApiKeyModal()" id="api-key-btn" class="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 active:scale-95">
+          🔑 Key
+        </button>
+        <button onclick="toggleTheme()" class="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-sm active:scale-95" aria-label="Đổi giao diện">
+          🌓
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Nội dung chính -->
+  <main class="max-w-xl mx-auto px-4 pt-3 pb-10">
+
+    <!-- TAB 1: TRÌNH ĐỌC -->
+    <section id="tab-reader" class="space-y-4">
+      <div class="flex items-center justify-between gap-2">
+        <select id="story-selector" onchange="selectStory(this.value)" class="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </select>
+        <button onclick="markAllKnownInStory()" class="px-3 py-2 text-xs font-medium rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 whitespace-nowrap active:scale-95">
+          ✓ Thuộc bài này
+        </button>
+      </div>
+
+      <!-- Chú giải màu -->
+      <div class="flex items-center justify-between text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2">
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-blue-500/40 inline-block"></span> Mới</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-amber-500/50 inline-block"></span> Đang học</span>
+          <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm border border-slate-400 inline-block"></span> Đã thuộc</span>
+        </div>
+        <span class="text-slate-400">Chạm vào từ để dịch</span>
+      </div>
+
+      <!-- Khung bài đọc -->
+      <article class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+        <div class="flex items-start justify-between gap-2 mb-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div>
+            <span id="story-level" class="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400">A1</span>
+            <h2 id="story-title" class="text-lg font-bold mt-1"></h2>
+          </div>
+          <button onclick="speakCurrentStory()" class="px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-medium flex items-center gap-1 shadow-sm active:scale-95">
+            🔊 Nghe bài
+          </button>
+        </div>
+
+        <div id="reader-content" class="space-y-4 select-text"></div>
+      </article>
+    </section>
+
+    <!-- TAB 2: ÔN TẬP (LINGVIST CLOZE) -->
+    <section id="tab-review" class="hidden space-y-4">
+      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-bold text-base">Ôn tập theo ngữ cảnh</h2>
+          <span id="review-counter" class="text-xs px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-500 font-semibold">0 thẻ</span>
+        </div>
+
+        <div id="review-empty" class="text-center py-8 text-slate-400 text-sm">
+          Chưa có từ nào ở trạng thái <b>Đang học (màu vàng)</b>.<br />
+          Hãy chạm vào các từ mới trong bài đọc để thêm vào danh sách ôn tập.
+        </div>
+
+        <div id="review-card" class="hidden space-y-4">
+          <div class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700">
+            <p class="text-xs text-slate-400 mb-1">Điền từ tiếng Phần còn thiếu:</p>
+            <p id="cloze-sentence" class="text-base font-medium leading-relaxed"></p>
+            <p id="cloze-vi-hint" class="text-xs text-blue-500 dark:text-blue-400 mt-2 font-medium"></p>
+          </div>
+
+          <!-- Bàn phím nhanh ký tự Phần -->
+          <div class="flex items-center gap-2">
+            <input id="cloze-input" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Gõ từ tiếng Phần..." class="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <button onclick="insertSpecialChar('ä')" class="px-3 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 font-bold text-sm active:scale-95">ä</button>
+            <button onclick="insertSpecialChar('ö')" class="px-3 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 font-bold text-sm active:scale-95">ö</button>
+          </div>
+
+          <!-- Gợi ý chọn nhanh -->
+          <div id="cloze-choices" class="grid grid-cols-2 gap-2"></div>
+
+          <div id="cloze-feedback" class="hidden text-xs font-medium p-2.5 rounded-xl"></div>
+
+          <div class="flex items-center gap-2 pt-1">
+            <button onclick="checkClozeAnswer()" class="flex-1 py-2.5 rounded-xl bg-blue-600 text-white font-semibold text-sm active:scale-95">Kiểm tra</button>
+            <button onclick="nextReviewCard()" class="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-sm font-medium active:scale-95">Bỏ qua →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: THÊM BÀI ĐỌC MỚI -->
+    <section id="tab-add" class="hidden space-y-4">
+      <!-- Dán bài báo -->
+      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+        <h2 class="font-bold text-base">Dán văn bản / Tin tức Yle Selkouutiset</h2>
+        <input id="custom-title" type="text" placeholder="Tiêu đề bài đọc (ví dụ: Tin tức hôm nay)" class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm" />
+        <textarea id="custom-content" rows="5" placeholder="Dán đoạn văn tiếng Phần vào đây..." class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm"></textarea>
+        <button onclick="saveCustomStory()" class="w-full py-2.5 rounded-xl bg-blue-600 text-white font-semibold text-sm active:scale-95">
+          Lưu & Mở bài đọc
+        </button>
+      </div>
+
+      <!-- Tạo truyện bằng Gemini AI -->
+      <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
+        <h2 class="font-bold text-base">✨ Tạo mẩu truyện tiếng Phần bằng AI</h2>
+        <div class="flex gap-2">
+          <input id="ai-topic" type="text" placeholder="Chủ đề (VD: Đi siêu thị K-Market, Mùa đông...)" class="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm" />
+          <select id="ai-level" class="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-2 text-sm font-medium">
+            <option value="A1">A1</option>
+            <option value="A2">A2</option>
+            <option value="B1">B1</option>
+          </select>
+        </div>
+        <button id="ai-gen-btn" onclick="generateAIStory()" class="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm active:scale-95">
+          Tạo bài đọc mới
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Khung dịch Bottom Sheet chuẩn iOS -->
+  <div id="sheet-backdrop" onclick="closeBottomSheet()" class="fixed inset-0 bg-black/40 z-40 hidden opacity-0 transition-opacity duration-200"></div>
+  <div id="bottom-sheet" class="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 rounded-t-3xl shadow-2xl sheet-hidden max-w-xl mx-auto">
+    <div id="sheet-drag-handle" class="w-full pt-2.5 pb-1 flex justify-center cursor-grab">
+      <div class="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700"></div>
+    </div>
+
+    <div class="px-5 pt-2 pb-4 space-y-3">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <h3 id="sheet-word" class="text-xl font-bold text-blue-600 dark:text-blue-400"></h3>
+            <button onclick="speakSelectedWord()" class="p-1.5 rounded-full bg-blue-500/15 text-blue-500 text-xs active:scale-90">🔊</button>
+          </div>
+          <p id="sheet-lemma" class="text-xs text-slate-500 dark:text-slate-400 mt-0.5"></p>
+        </div>
+
+        <!-- Nút chọn trạng thái nhớ -->
+        <div class="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold">
+          <button id="status-btn-new" onclick="setWordStatus('new')" class="px-2.5 py-1 rounded-lg">Mới</button>
+          <button id="status-btn-learning" onclick="setWordStatus('learning')" class="px-2.5 py-1 rounded-lg">Đang học</button>
+          <button id="status-btn-known" onclick="setWordStatus('known')" class="px-2.5 py-1 rounded-lg">Đã thuộc</button>
+        </div>
+      </div>
+
+      <!-- Nghĩa tiếng Việt & Phân tích biến cách -->
+      <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/70 space-y-1.5">
+        <div class="flex items-baseline justify-between">
+          <span class="text-[11px] uppercase tracking-wider font-semibold text-slate-400">Nghĩa trong câu</span>
+          <span id="sheet-source-tag" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-300">Từ điển nội bộ</span>
+        </div>
+        <p id="sheet-meaning" class="text-base font-bold text-emerald-600 dark:text-emerald-400"></p>
+        <p id="sheet-grammar" class="text-xs text-amber-600 dark:text-amber-400 leading-relaxed"></p>
+      </div>
+
+      <!-- Câu ngữ cảnh -->
+      <div class="text-xs space-y-1 bg-slate-100/70 dark:bg-slate-800/40 p-2.5 rounded-xl">
+        <div class="flex items-center justify-between">
+          <span class="font-semibold text-slate-500">Câu ngữ cảnh:</span>
+          <button onclick="speakSelectedSentence()" class="text-blue-500 font-medium">🔊 Đọc cả câu</button>
+        </div>
+        <p id="sheet-sentence-fi" class="text-slate-700 dark:text-slate-200 italic"></p>
+        <p id="sheet-sentence-vi" class="text-slate-500 dark:text-slate-400"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hộp thoại cài đặt Gemini API Key -->
+  <div id="api-modal" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-sm w-full p-5 space-y-3 shadow-xl">
+      <h3 class="font-bold text-base">Cài đặt Gemini API Key</h3>
+      <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+        Mã Key được lưu trực tiếp trong bộ nhớ trình duyệt trên iPhone của bạn (`localStorage`), không đưa lên GitHub.
+      </p>
+      <input id="api-key-input" type="password" placeholder="Dán mã AIza... vào đây" class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      <div class="flex justify-end gap-2 pt-1">
+        <button onclick="closeApiKeyModal()" class="px-3.5 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-xs font-semibold">Đóng</button>
+        <button onclick="saveApiKey()" class="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold">Lưu Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thanh điều hướng dưới đáy chuẩn iPhone -->
+  <nav class="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 pb-[env(safe-area-inset-bottom)]">
+    <div class="max-w-xl mx-auto grid grid-cols-3 py-1.5">
+      <button onclick="switchTab('reader')" id="nav-reader" class="flex flex-col items-center py-1 text-blue-600 dark:text-blue-400 font-semibold text-xs">
+        <span class="text-base">📖</span>
+        <span>Đọc bài</span>
+      </button>
+      <button onclick="switchTab('review')" id="nav-review" class="flex flex-col items-center py-1 text-slate-400 font-medium text-xs">
+        <span class="text-base">🎯</span>
+        <span>Ôn tập</span>
+      </button>
+      <button onclick="switchTab('add')" id="nav-add" class="flex flex-col items-center py-1 text-slate-400 font-medium text-xs">
+        <span class="text-base">➕</span>
+        <span>Thêm bài</span>
+      </button>
+    </div>
+  </nav>
+
+  <script>
+    // --- DỮ LIỆU BÀI ĐỌC MẪU ---
+    const DEFAULT_STORIES = [
+      {
+        id: 'story-1',
+        title: 'Aamu suomalaisessa kahvilassa (Buổi sáng ở quán cà phê)',
+        level: 'A1',
+        paragraphs: [
+          {
+            fi: 'Minä istun pienessä kahvilassa Helsingissä. Ulkona sataa lunta, mutta sisällä on lämmin.',
+            vi: 'Tôi đang ngồi trong một quán cà phê nhỏ ở Helsinki. Bên ngoài trời đang rơi tuyết, nhưng bên trong thì ấm áp.'
+          },
+          {
+            fi: 'Tilaan kupin kuumaa kahvia kauramaidolla ja tuoreen korvapuustin. Myyjä hymyilee ja sanoo: "Ole hyvä!"',
+            vi: 'Tôi gọi một tách cà phê nóng với sữa yến mạch và một chiếc bánh quế cuộn tươi. Người bán hàng mỉm cười và nói: "Xin mời bạn!"'
+          },
+          {
+            fi: 'Luen uutisia puhelimesta ja opiskelen suomen kieltä joka päivä.',
+            vi: 'Tôi đọc tin tức từ điện thoại và học tiếng Phần Lan mỗi ngày.'
+          }
+        ]
+      },
+      {
+        id: 'story-2',
+        title: 'Revontulet Lapissa (Bắc cực quang ở Lapland)',
+        level: 'A2',
+        paragraphs: [
+          {
+            fi: 'Talvella pohjoisessa yö on pitkä ja pimeä. Kun taivas on kirkas, voimme nähdä revontulet.',
+            vi: 'Vào mùa đông ở phương bắc, đêm dài và tối. Khi bầu trời quang đãng, chúng ta có thể nhìn thấy Bắc cực quang.'
+          },
+          {
+            fi: 'Kävelemme metsässä lumikengillä ja juomme lämmintä marjamehua nuotion äärellä.',
+            vi: 'Chúng tôi đi bộ trong rừng bằng giày đi tuyết và uống nước ép quả mọng ấm bên ánh lửa trại.'
+          }
+        ]
+      }
+    ];
+
+    // --- TỪ ĐIỂN PHẦN - VIỆT NỘI BỘ ---
+    const BUILTIN_DICT = {
+      "minä": { lemma: "minä", meaning: "tôi", grammar: "Đại từ nhân xưng ngôi thứ 1 số ít" },
+      "istun": { lemma: "istua", meaning: "tôi ngồi / đang ngồi", grammar: "Động từ loại 1, ngôi thứ 1 số ít (-n)" },
+      "pienessä": { lemma: "pieni", meaning: "ở trong ... nhỏ", grammar: "Tính từ + biến cách Inessive (-ssä: ở trong)" },
+      "kahvilassa": { lemma: "kahvila", meaning: "ở trong quán cà phê", grammar: "Danh từ + Inessive (-ssa: ở trong)" },
+      "helsingissä": { lemma: "Helsinki", meaning: "tại Helsinki", grammar: "Inessive (-ssä) + biến đổi phụ âm KPT (nk -> ng)" },
+      "ulkona": { lemma: "ulkona", meaning: "ở bên ngoài", grammar: "Trạng từ chỉ nơi chốn (Essive)" },
+      "sataa": { lemma: "sataa", meaning: "mưa / rơi (tuyết)", grammar: "Động từ ngôi thứ 3 số ít" },
+      "lunta": { lemma: "lumi", meaning: "tuyết", grammar: "Biến cách Partitive số ít của 'lumi' (dùng với sataa)" },
+      "mutta": { lemma: "mutta", meaning: "nhưng", grammar: "Liên từ đối lập" },
+      "sisällä": { lemma: "sisällä", meaning: "ở bên trong", grammar: "Trạng từ nơi chốn (Adessive -llä)" },
+      "on": { lemma: "olla", meaning: "là / thì / có", grammar: "Động từ 'olla' chia ngôi thứ 3 số ít" },
+      "lämmin": { lemma: "lämmin", meaning: "ấm áp", grammar: "Tính từ ở dạng nguyên mẫu (Nominative)" },
+      "tilaan": { lemma: "tilata", meaning: "tôi đặt / tôi gọi món", grammar: "Động từ loại 4 (tilata -> tilaa- + -n)" },
+      "kupin": { lemma: "kuppi", meaning: "một tách", grammar: "Genitive/Accusative (-n) + biến đổi KPT (pp -> p)" },
+      "kuumaa": { lemma: "kuuma", meaning: "nóng", grammar: "Tính từ chia ở Partitive (-a) bổ nghĩa cho kahvia" },
+      "kahvia": { lemma: "kahvi", meaning: "cà phê (một lượng)", grammar: "Danh từ không đếm được ở Partitive (-a)" },
+      "kauramaidolla": { lemma: "kauramaito", meaning: "với sữa yến mạch", grammar: "Danh từ ghép (kaura + maito) + Adessive (-lla) + KPT (t -> d)" },
+      "ja": { lemma: "ja", meaning: "và", grammar: "Liên từ kết nối" },
+      "tuoreen": { lemma: "tuore", meaning: "tươi / mới ra lò", grammar: "Tính từ ở Genitive/Accusative (-en)" },
+      "korvapuustin": { lemma: "korvapuusti", meaning: "bánh quế cuộn Phần Lan", grammar: "Danh từ ở Accusative (-n) cho vật đếm được trọn vẹn" },
+      "myyjä": { lemma: "myyjä", meaning: "người bán hàng / nhân viên thu ngân", grammar: "Danh từ chỉ người (-ja/-jä)" },
+      "hymyilee": { lemma: "hymyillä", meaning: "mỉm cười", grammar: "Động từ loại 3, ngôi thứ 3 số ít (-ee)" },
+      "sanoo": { lemma: "sanoa", meaning: "nói rằng", grammar: "Động từ loại 1, ngôi thứ 3 số ít (kéo dài nguyên âm cuối)" },
+      "ole": { lemma: "olla", meaning: "hãy là (trong cụm 'Ole hyvä')", grammar: "Thức mệnh lệnh ngôi thứ 2 số ít của 'olla'" },
+      "hyvä": { lemma: "hyvä", meaning: "tốt (Ole hyvä = Xin mời / Không có chi)", grammar: "Tính từ nguyên mẫu" },
+      "luen": { lemma: "lukea", meaning: "tôi đọc", grammar: "Động từ loại 1 + biến đổi KPT (k bị lược bỏ trước -en)" },
+      "uutisia": { lemma: "uutinen", meaning: "tin tức", grammar: "Danh từ đuôi -nen chuyển sang Partitive số nhiều (-sia)" },
+      "puhelimesta": { lemma: "puhelin", meaning: "từ điện thoại", grammar: "Danh từ đuôi -in -> -ime- + Elative (-sta: từ bên trong ra)" },
+      "opiskelen": { lemma: "opiskella", meaning: "tôi học", grammar: "Động từ loại 3 (-lla -> -le- + -n)" },
+      "suomen": { lemma: "suomi", meaning: "thuộc về tiếng Phần Lan", grammar: "Genitive (-n) của 'suomi' (e -> i)" },
+      "kieltä": { lemma: "kieli", meaning: "ngôn ngữ / tiếng", grammar: "Partitive số ít (-tä) đi sau động từ opiskella" },
+      "joka": { lemma: "joka", meaning: "mỗi / mọi", grammar: "Từ hạn định (không biến đổi)" },
+      "päivä": { lemma: "päivä", meaning: "ngày", grammar: "Danh từ nguyên mẫu" },
+      "talvella": { lemma: "talvi", meaning: "vào mùa đông", grammar: "Adessive (-lla) dùng để chỉ thời gian cho các mùa" },
+      "pohjoisessa": { lemma: "pohjoinen", meaning: "ở phương bắc", grammar: "Đuôi -nen -> -se- + Inessive (-ssa)" },
+      "yö": { lemma: "yö", meaning: "ban đêm", grammar: "Danh từ nguyên mẫu" },
+      "pitkä": { lemma: "pitkä", meaning: "dài", grammar: "Tính từ nguyên mẫu" },
+      "pimeä": { lemma: "pimeä", meaning: "tối tăm", grammar: "Tính từ nguyên mẫu" },
+      "kun": { lemma: "kun", meaning: "khi", grammar: "Liên từ chỉ thời gian" },
+      "taivas": { lemma: "taivas", meaning: "bầu trời", grammar: "Danh từ nguyên mẫu" },
+      "kirkas": { lemma: "kirkas", meaning: "quang đãng / sáng", grammar: "Tính từ nguyên mẫu" },
+      "voimme": { lemma: "voida", meaning: "chúng ta có thể", grammar: "Động từ loại 2, ngôi thứ 1 số nhiều (-mme)" },
+      "nähdä": { lemma: "nähdä", meaning: "nhìn thấy", grammar: "Động từ loại 2 ở dạng nguyên mẫu" },
+      "revontulet": { lemma: "revontuli", meaning: "Bắc cực quang", grammar: "Danh từ số nhiều (-t)" },
+      "kävelemme": { lemma: "kävellä", meaning: "chúng tôi đi bộ", grammar: "Động từ loại 3, ngôi thứ 1 số nhiều (-mme)" },
+      "metsässä": { lemma: "metsä", meaning: "ở trong rừng", grammar: "Inessive (-ssä: ở trong)" },
+      "lumikengillä": { lemma: "lumikenkä", meaning: "bằng giày đi tuyết", grammar: "Số nhiều (-i-) + Adessive (-llä: bằng phương tiện) + KPT (nk -> ng)" },
+      "juomme": { lemma: "juoda", meaning: "chúng tôi uống", grammar: "Động từ loại 2, ngôi thứ 1 số nhiều (-mme)" },
+      "lämmintä": { lemma: "lämmin", meaning: "ấm", grammar: "Tính từ ở Partitive số ít (-tä)" },
+      "marjamehua": { lemma: "marjamehu", meaning: "nước ép quả mọng", grammar: "Danh từ ghép + Partitive số ít (-a)" },
+      "nuotion": { lemma: "nuotio", meaning: "của lửa trại", grammar: "Genitive (-n) đi trước hậu giới từ 'äärellä'" },
+      "äärellä": { lemma: "äärellä", meaning: "ở bên cạnh / quanh", grammar: "Hậu giới từ (Postposition)" }
+    };
+
+    // --- BỘ PHÂN TÍCH HẬU TỐ 15 BIẾN CÁCH NỘI BỘ ---
+    function analyzeFinnishMorphology(word) {
+      const w = word.toLowerCase();
+      const rules = [
+        { suffix: 'ssani', name: 'Inessive + Sở hữu (-ssani)', desc: 'Ở trong ... của tôi' },
+        { suffix: 'ssa', name: 'Inessive (-ssa)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
+        { suffix: 'ssä', name: 'Inessive (-ssä)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
+        { suffix: 'sta', name: 'Elative (-sta)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
+        { suffix: 'stä', name: 'Elative (-stä)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
+        { suffix: 'lla', name: 'Adessive (-lla)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
+        { suffix: 'llä', name: 'Adessive (-llä)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
+        { suffix: 'lta', name: 'Ablative (-lta)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
+        { suffix: 'ltä', name: 'Ablative (-ltä)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
+        { suffix: 'lle', name: 'Allative (-lle)', desc: 'Hướng lên bề mặt hoặc hướng tới ai đó ("đến / cho...")' },
+        { suffix: 'ksi', name: 'Translative (-ksi)', desc: 'Chỉ sự biến đổi trạng thái ("trở thành...")' },
+        { suffix: 'tta', name: 'Abessive (-tta)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
+        { suffix: 'ttä', name: 'Abessive (-ttä)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
+        { suffix: 'mme', name: 'Ngôi thứ 1 số nhiều (-mme)', desc: 'Động từ chia ngôi "chúng tôi" hoặc hậu tố sở hữu "của chúng tôi"' },
+        { suffix: 'tte', name: 'Ngôi thứ 2 số nhiều (-tte)', desc: 'Động từ chia ngôi "các bạn"' },
+        { suffix: 'vat', name: 'Ngôi thứ 3 số nhiều (-vat)', desc: 'Động từ chia ngôi "họ"' },
+        { suffix: 'vät', name: 'Ngôi thứ 3 số nhiều (-vät)', desc: 'Động từ chia ngôi "họ"' }
+      ];
+      for (const r of rules) {
+        if (w.length > r.suffix.length + 2 && w.endsWith(r.suffix)) {
+          const stem = w.slice(0, -r.suffix.length);
+          return {
+            lemma: stem + '-',
+            grammar: `${r.name}: ${r.desc}`
+          };
+        }
+      }
+      return {
+        lemma: w,
+        grammar: 'Từ tiếng Phần (nhập Gemini API Key ở nút 🔑 Key để phân tích sâu mọi biến cách)'
+      };
+    }
+
+    // --- TRẠNG THÁI ỨNG DỤNG ---
+    let stories = [];
+    let currentStoryId = 'story-1';
+    let wordStatusMap = {}; // { wordLower: { status, meaning, lemma, grammar, sentenceFi, sentenceVi } }
+    let selectedTokenEl = null;
+    let selectedWordKey = '';
+    let selectedSentenceFi = '';
+    let selectedSentenceVi = '';
+    let activeLookupId = 0;
+    let reviewQueue = [];
+    let currentReviewIndex = 0;
+    let cachedFinnishVoice = null;
+
+    function safeGetStorage(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function safeSetStorage(key, val) {
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+      } catch (e) {}
+    }
+
+    function initApp() {
+      stories = safeGetStorage('suomi_stories_v2', DEFAULT_STORIES);
+      wordStatusMap = safeGetStorage('suomi_words_v2', {});
+      renderStorySelector();
+      selectStory(stories[0].id);
+      updateStatsBadge();
+      updateApiKeyButtonState();
+      initVoices();
+      initReaderDelegation();
+      initSwipeToDismiss();
+    }
+
+    // --- QUẢN LÝ GEMINI API KEY ---
+    function getApiKey() {
+      try {
+        return localStorage.getItem('suomi_gemini_key') || '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function updateApiKeyButtonState() {
+      const btn = document.getElementById('api-key-btn');
+      const hasKey = Boolean(getApiKey());
+      if (hasKey) {
+        btn.textContent = '🔑 Đã có Key';
+        btn.className = 'px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 active:scale-95';
+      } else {
+        btn.textContent = '🔑 Key';
+        btn.className = 'px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 active:scale-95';
+      }
+    }
+
+    function openApiKeyModal() {
+      const modal = document.getElementById('api-modal');
+      const input = document.getElementById('api-key-input');
+      input.value = getApiKey();
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    function closeApiKeyModal() {
+      const modal = document.getElementById('api-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    function saveApiKey() {
+      const val = document.getElementById('api-key-input').value.trim();
+      try {
+        if (val) {
+          localStorage.setItem('suomi_gemini_key', val);
+        } else {
+          localStorage.removeItem('suomi_gemini_key');
+        }
+      } catch (e) {}
+      updateApiKeyButtonState();
+      closeApiKeyModal();
+    }
+
+    // --- GIỌNG ĐỌC TIẾNG PHẦN (TTS) ---
+    function initVoices() {
+      if (!('speechSynthesis' in window)) return;
+      const findVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        cachedFinnishVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('fi')) || null;
+      };
+      findVoice();
+      window.speechSynthesis.onvoiceschanged = findVoice;
+    }
+
+    function speakFinnish(text) {
+      if (!('speechSynthesis' in window) || !text) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'fi-FI';
+      if (cachedFinnishVoice) utter.voice = cachedFinnishVoice;
+      utter.rate = 0.92;
+      window.speechSynthesis.speak(utter);
+    }
+
+    function speakSelectedWord() {
+      const word = document.getElementById('sheet-word').textContent;
+      speakFinnish(word);
+    }
+
+    function speakSelectedSentence() {
+      speakFinnish(selectedSentenceFi);
+    }
+
+    function speakCurrentStory() {
+      const story = stories.find(s => s.id === currentStoryId);
+      if (!story) return;
+      const fullText = story.paragraphs.map(p => p.fi).join(' ');
+      speakFinnish(fullText);
+    }
+
+    // --- TRÌNH ĐỌC & TÁCH TỪ ---
+    function renderStorySelector() {
+      const sel = document.getElementById('story-selector');
+      sel.innerHTML = stories.map(s => `<option value="${s.id}">${s.level} – ${s.title}</option>`).join('');
+      sel.value = currentStoryId;
+    }
+
+    function selectStory(storyId) {
+      currentStoryId = storyId;
+      const story = stories.find(s => s.id === storyId) || stories[0];
+      document.getElementById('story-title').textContent = story.title;
+      document.getElementById('story-level').textContent = story.level || 'A1';
+
+      const container = document.getElementById('reader-content');
+      container.innerHTML = story.paragraphs.map((p, pIdx) => {
+        const tokensHtml = tokenizeParagraph(p.fi, pIdx);
+        return `
+          <div class="space-y-1.5 pb-3 border-b border-slate-100 dark:border-slate-800/70 last:border-none">
+            <div class="leading-relaxed">${tokensHtml}</div>
+            <p class="text-xs text-slate-400 dark:text-slate-500">${p.vi || ''}</p>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function tokenizeParagraph(text, pIdx) {
+      const parts = text.split(/([A-Za-zÄÖÅäöå]+)/g);
+      return parts.map(part => {
+        if (/^[A-Za-zÄÖÅäöå]+$/.test(part)) {
+          const clean = part.toLowerCase();
+          const saved = wordStatusMap[clean];
+          const status = saved ? saved.status : 'new';
+          return `<span class="word-token word-${status}" data-word="${part}" data-clean="${clean}" data-pidx="${pIdx}">${part}</span>`;
+        }
+        return part;
+      }).join('');
+    }
+
+    function initReaderDelegation() {
+      const container = document.getElementById('reader-content');
+      container.addEventListener('click', (e) => {
+        const token = e.target.closest('.word-token');
+        if (!token) return;
+        handleWordTap(token);
+      });
+    }
+
+    async function handleWordTap(tokenEl) {
+      if (selectedTokenEl) selectedTokenEl.classList.remove('word-selected');
+      selectedTokenEl = tokenEl;
+      tokenEl.classList.add('word-selected');
+
+      const surfaceWord = tokenEl.dataset.word;
+      const cleanWord = tokenEl.dataset.clean;
+      const pIdx = parseInt(tokenEl.dataset.pidx, 10);
+      const story = stories.find(s => s.id === currentStoryId) || stories[0];
+      const para = story.paragraphs[pIdx] || { fi: '', vi: '' };
+
+      selectedWordKey = cleanWord;
+      selectedSentenceFi = para.fi;
+      selectedSentenceVi = para.vi || '';
+
+      speakFinnish(surfaceWord);
+
+      // Nếu là từ mới, tự động chuyển sang Đang học (màu vàng) giống LingQ
+      if (!wordStatusMap[cleanWord] || wordStatusMap[cleanWord].status === 'new') {
+        updateSingleWordStatus(cleanWord, 'learning');
+      } else {
+        highlightStatusButtons(wordStatusMap[cleanWord].status);
+      }
+
+      document.getElementById('sheet-word').textContent = surfaceWord;
+      document.getElementById('sheet-sentence-fi').textContent = selectedSentenceFi;
+      document.getElementById('sheet-sentence-vi').textContent = selectedSentenceVi;
+
+      openBottomSheet();
+
+      // 1. Kiểm tra từ điển nội bộ hoặc dữ liệu đã lưu
+      const dictHit = BUILTIN_DICT[cleanWord] || (wordStatusMap[cleanWord] && wordStatusMap[cleanWord].meaning ? wordStatusMap[cleanWord] : null);
+      if (dictHit) {
+        document.getElementById('sheet-source-tag').textContent = 'Từ điển tốc độ cao';
+        document.getElementById('sheet-lemma').textContent = `Từ gốc (Perusmuoto): ${dictHit.lemma}`;
+        document.getElementById('sheet-meaning').textContent = dictHit.meaning;
+        document.getElementById('sheet-grammar').textContent = dictHit.grammar;
+        saveWordDetails(cleanWord, dictHit.meaning, dictHit.lemma, dictHit.grammar);
+        return;
+      }
+
+      // 2. Phân tích hình thái học tức thì + gọi Gemini nếu có Key
+      const morph = analyzeFinnishMorphology(cleanWord);
+      document.getElementById('sheet-lemma').textContent = `Gốc dự đoán: ${morph.lemma}`;
+      document.getElementById('sheet-grammar').textContent = morph.grammar;
+
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        document.getElementById('sheet-source-tag').textContent = 'Offline';
+        document.getElementById('sheet-meaning').textContent = 'Bấm nút "🔑 Key" ở góc trên để kích hoạt AI dịch mọi từ mới';
+        return;
+      }
+
+      const reqId = ++activeLookupId;
+      document.getElementById('sheet-source-tag').textContent = 'Gemini AI đang phân tích...';
+      document.getElementById('sheet-meaning').textContent = 'Đang dịch theo ngữ cảnh câu...';
+
+      try {
+        const prompt = `Phân tích từ tiếng Phần "${surfaceWord}" trong câu "${selectedSentenceFi}". Trả về JSON thuần (không markdown) với các trường: {"meaning": "nghĩa tiếng Việt ngắn gọn trong câu", "lemma": "từ nguyên mẫu perusmuoto", "grammar": "giải thích biến cách/chia động từ ngắn gọn", "sentenceVi": "dịch cả câu sang tiếng Việt"}.`;
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' }
+          })
+        });
+        const data = await res.json();
+        if (reqId !== activeLookupId) return;
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        const parsed = JSON.parse(rawText);
+
+        document.getElementById('sheet-source-tag').textContent = 'Gemini AI';
+        document.getElementById('sheet-lemma').textContent = `Từ gốc (Perusmuoto): ${parsed.lemma || cleanWord}`;
+        document.getElementById('sheet-meaning').textContent = parsed.meaning || 'Đã phân tích';
+        document.getElementById('sheet-grammar').textContent = parsed.grammar || morph.grammar;
+        if (parsed.sentenceVi && !selectedSentenceVi) {
+          document.getElementById('sheet-sentence-vi').textContent = parsed.sentenceVi;
+          selectedSentenceVi = parsed.sentenceVi;
+        }
+        saveWordDetails(cleanWord, parsed.meaning, parsed.lemma, parsed.grammar);
+      } catch (err) {
+        if (reqId !== activeLookupId) return;
+        document.getElementById('sheet-source-tag').textContent = 'Lỗi kết nối API';
+        document.getElementById('sheet-meaning').textContent = 'Kiểm tra lại mã Gemini API Key hoặc kết nối mạng';
+      }
+    }
+
+    function saveWordDetails(cleanWord, meaning, lemma, grammar) {
+      const existing = wordStatusMap[cleanWord] || { status: 'learning' };
+      wordStatusMap[cleanWord] = {
+        ...existing,
+        meaning: meaning || existing.meaning || '',
+        lemma: lemma || existing.lemma || cleanWord,
+        grammar: grammar || existing.grammar || '',
+        sentenceFi: selectedSentenceFi || existing.sentenceFi || '',
+        sentenceVi: selectedSentenceVi || existing.sentenceVi || ''
+      };
+      safeSetStorage('suomi_words_v2', wordStatusMap);
+    }
+
+    function setWordStatus(newStatus) {
+      if (!selectedWordKey) return;
+      updateSingleWordStatus(selectedWordKey, newStatus);
+    }
+
+    function updateSingleWordStatus(cleanWord, newStatus) {
+      const prev = wordStatusMap[cleanWord] || {};
+      const dictHit = BUILTIN_DICT[cleanWord] || {};
+      wordStatusMap[cleanWord] = {
+        ...prev,
+        status: newStatus,
+        meaning: prev.meaning || dictHit.meaning || '',
+        lemma: prev.lemma || dictHit.lemma || cleanWord,
+        grammar: prev.grammar || dictHit.grammar || '',
+        sentenceFi: prev.sentenceFi || selectedSentenceFi || '',
+        sentenceVi: prev.sentenceVi || selectedSentenceVi || ''
+      };
+      safeSetStorage('suomi_words_v2', wordStatusMap);
+
+      document.querySelectorAll(`.word-token[data-clean="${cleanWord}"]`).forEach(el => {
+        el.classList.remove('word-new', 'word-learning', 'word-known');
+        el.classList.add(`word-${newStatus}`);
+      });
+
+      highlightStatusButtons(newStatus);
+      updateStatsBadge();
+    }
+
+    function highlightStatusButtons(status) {
+      const configs = {
+        new: { id: 'status-btn-new', activeClass: 'bg-blue-600 text-white' },
+        learning: { id: 'status-btn-learning', activeClass: 'bg-amber-500 text-white' },
+        known: { id: 'status-btn-known', activeClass: 'bg-emerald-600 text-white' }
+      };
+      Object.keys(configs).forEach(k => {
+        const btn = document.getElementById(configs[k].id);
+        btn.className = 'px-2.5 py-1 rounded-lg transition-colors ' + (k === status ? configs[k].activeClass : 'text-slate-500');
+      });
+    }
+
+    function markAllKnownInStory() {
+      document.querySelectorAll('#reader-content .word-token').forEach(el => {
+        const clean = el.dataset.clean;
+        updateSingleWordStatus(clean, 'known');
+      });
+    }
+
+    function updateStatsBadge() {
+      const vals = Object.values(wordStatusMap);
+      const learningCount = vals.filter(v => v.status === 'learning').length;
+      const knownCount = vals.filter(v => v.status === 'known').length;
+      document.getElementById('stats-badge').textContent = `${learningCount} đang học • ${knownCount} đã thuộc`;
+    }
+
+    // --- BOTTOM SHEET ĐIỀU KHIỂN ---
+    function openBottomSheet() {
+      const sheet = document.getElementById('bottom-sheet');
+      const backdrop = document.getElementById('sheet-backdrop');
+      backdrop.classList.remove('hidden');
+      requestAnimationFrame(() => {
+        backdrop.classList.add('opacity-100');
+        sheet.classList.remove('sheet-hidden');
+        sheet.classList.add('sheet-visible');
+      });
+    }
+
+    function closeBottomSheet() {
+      const sheet = document.getElementById('bottom-sheet');
+      const backdrop = document.getElementById('sheet-backdrop');
+      sheet.classList.remove('sheet-visible');
+      sheet.classList.add('sheet-hidden');
+      backdrop.classList.remove('opacity-100');
+      if (selectedTokenEl) selectedTokenEl.classList.remove('word-selected');
+      setTimeout(() => backdrop.classList.add('hidden'), 200);
+    }
+
+    function initSwipeToDismiss() {
+      const sheet = document.getElementById('bottom-sheet');
+      let startY = 0;
+      sheet.addEventListener('touchstart', e => {
+        startY = e.touches[0].clientY;
+      }, { passive: true });
+      sheet.addEventListener('touchend', e => {
+        const endY = e.changedTouches[0].clientY;
+        if (endY - startY > 55) closeBottomSheet();
+      }, { passive: true });
+    }
+
+    // --- TAB ÔN TẬP (LINGVIST CLOZE) ---
+    function buildReviewQueue() {
+      reviewQueue = Object.entries(wordStatusMap)
+        .filter(([, data]) => data.status === 'learning')
+        .map(([word, data]) => ({ word, ...data }));
+
+      document.getElementById('review-counter').textContent = `${reviewQueue.length} thẻ`;
+
+      if (reviewQueue.length === 0) {
+        document.getElementById('review-empty').classList.remove('hidden');
+        document.getElementById('review-card').classList.add('hidden');
+        return;
+      }
+      document.getElementById('review-empty').classList.add('hidden');
+      document.getElementById('review-card').classList.remove('hidden');
+      currentReviewIndex = 0;
+      renderReviewCard();
+    }
+
+    function renderReviewCard() {
+      if (reviewQueue.length === 0) return;
+      const item = reviewQueue[currentReviewIndex % reviewQueue.length];
+      const sentence = item.sentenceFi || `Opiskelen sanaa ${item.word} tänään.`;
+      const regex = new RegExp(`\\b${item.word}\\b`, 'i');
+      const clozeText = sentence.replace(regex, '______');
+
+      document.getElementById('cloze-sentence').textContent = clozeText;
+      document.getElementById('cloze-vi-hint').textContent = `Gợi ý: ${item.meaning || 'Từ đã đánh dấu'} (Gốc: ${item.lemma || item.word})`;
+      document.getElementById('cloze-input').value = '';
+      document.getElementById('cloze-feedback').classList.add('hidden');
+
+      // Tạo 4 lựa chọn nhanh
+      const pool = Object.keys(BUILTIN_DICT).filter(w => w !== item.word);
+      const distractors = pool.sort(() => 0.5 - Math.random()).slice(0, 3);
+      const choices = [...distractors, item.word].sort(() => 0.5 - Math.random());
+
+      document.getElementById('cloze-choices').innerHTML = choices.map(c => `
+        <button onclick="selectChoice('${c}')" class="py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/20 text-sm font-medium border border-slate-200 dark:border-slate-700 active:scale-95">
+          ${c}
+        </button>
+      `).join('');
+    }
+
+    function selectChoice(val) {
+      document.getElementById('cloze-input').value = val;
+      checkClozeAnswer();
+    }
+
+    function insertSpecialChar(ch) {
+      const input = document.getElementById('cloze-input');
+      input.value += ch;
+      input.focus();
+    }
+
+    function checkClozeAnswer() {
+      if (reviewQueue.length === 0) return;
+      const item = reviewQueue[currentReviewIndex % reviewQueue.length];
+      const userAns = document.getElementById('cloze-input').value.trim().toLowerCase();
+      const fb = document.getElementById('cloze-feedback');
+      fb.classList.remove('hidden');
+
+      if (userAns === item.word.toLowerCase()) {
+        fb.className = 'text-xs font-semibold p-2.5 rounded-xl bg-emerald-500/15 text-emerald-500';
+        fb.textContent = `🎉 Chính xác! "${item.word}" (${item.meaning || ''}).`;
+        speakFinnish(item.word);
+      } else {
+        fb.className = 'text-xs font-semibold p-2.5 rounded-xl bg-rose-500/15 text-rose-500';
+        fb.textContent = `Chưa đúng. Đáp án là: "${item.word}"`;
+      }
+    }
+
+    function nextReviewCard() {
+      currentReviewIndex++;
+      renderReviewCard();
+    }
+
+    // --- THÊM BÀI ĐỌC & TẠO TRUYỆN AI ---
+    function saveCustomStory() {
+      const title = document.getElementById('custom-title').value.trim() || 'Bài đọc tự thêm';
+      const rawText = document.getElementById('custom-content').value.trim();
+      if (!rawText) return;
+
+      const paragraphs = rawText.split(/\n+/).filter(Boolean).map(line => ({
+        fi: line.trim(),
+        vi: ''
+      }));
+
+      const newStory = {
+        id: 'story-' + Date.now(),
+        title,
+        level: 'Tự chọn',
+        paragraphs
+      };
+
+      stories.unshift(newStory);
+      safeSetStorage('suomi_stories_v2', stories);
+      renderStorySelector();
+      selectStory(newStory.id);
+      switchTab('reader');
+      document.getElementById('custom-title').value = '';
+      document.getElementById('custom-content').value = '';
+    }
+
+    async function generateAIStory() {
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        openApiKeyModal();
+        return;
+      }
+      const topic = document.getElementById('ai-topic').value.trim() || 'Cuộc sống hàng ngày ở Phần Lan';
+      const level = document.getElementById('ai-level').value;
+      const btn = document.getElementById('ai-gen-btn');
+      btn.textContent = 'Đang viết truyện...';
+      btn.disabled = true;
+
+      try {
+        const prompt = `Viết một bài đọc tiếng Phần ngắn trình độ ${level} về chủ đề "${topic}" gồm 3 đoạn ngắn. Trả về JSON thuần theo cấu trúc: {"title": "Tiêu đề tiếng Phần (kèm nghĩa tiếng Việt)", "paragraphs": [{"fi": "Câu tiếng Phần", "vi": "Nghĩa tiếng Việt"}]}`;
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' }
+          })
+        });
+        const data = await res.json();
+        const parsed = JSON.parse(data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+        if (parsed.paragraphs && parsed.paragraphs.length) {
+          const newStory = {
+            id: 'story-' + Date.now(),
+            title: parsed.title || topic,
+            level,
+            paragraphs: parsed.paragraphs
+          };
+          stories.unshift(newStory);
+          safeSetStorage('suomi_stories_v2', stories);
+          renderStorySelector();
+          selectStory(newStory.id);
+          switchTab('reader');
+        }
+      } catch (e) {
+        alert('Không thể tạo truyện. Vui lòng kiểm tra lại Gemini API Key.');
+      } finally {
+        btn.textContent = 'Tạo bài đọc mới';
+        btn.disabled = false;
+      }
+    }
+
+    // --- ĐIỀU HƯỚNG & GIAO DIỆN ---
+    function switchTab(tab) {
+      closeBottomSheet();
+      ['reader', 'review', 'add'].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== tab);
+        const navBtn = document.getElementById(`nav-${t}`);
+        if (t === tab) {
+          navBtn.className = 'flex flex-col items-center py-1 text-blue-600 dark:text-blue-400 font-semibold text-xs';
+        } else {
+          navBtn.className = 'flex flex-col items-center py-1 text-slate-400 font-medium text-xs';
+        }
+      });
+      if (tab === 'review') buildReviewQueue();
+    }
+
+    function adjustFontSize(delta) {
+      const root = document.documentElement;
+      const current = parseFloat(getComputedStyle(root).getPropertyValue('--reader-font-size')) || 1.15;
+      const next = Math.min(1.6, Math.max(0.95, current + delta));
+      root.style.setProperty('--reader-font-size', `${next}rem`);
+    }
+
+    function toggleTheme() {
+      document.documentElement.classList.toggle('dark');
+    }
+
+    window.addEventListener('DOMContentLoaded', initApp);
+  </script>
+</body>
+</html>
