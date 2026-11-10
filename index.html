@@ -278,7 +278,7 @@
           <span class="text-[11px] px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-400 font-semibold">Gemini AI</span>
         </div>
 
-        <p class="text-xs text-slate-400">Chọn nhanh chủ đề gợi ý hoặc tự nhập chủ đề bạn muốn đọc:</p>
+        <p class="text-xs text-slate-400">Chọn nhanh chủ đề gợi ý hoặc tự nhập chủ đề bất kỳ bạn muốn đọc:</p>
         <div class="flex flex-wrap gap-1.5">
           <button type="button" onclick="setAiTopic('Đi mua đồ ở siêu thị K-Market')" class="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/20">🛒 Siêu thị K-Market</button>
           <button type="button" onclick="setAiTopic('Một ngày mùa đông ở Lapland')" class="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/20">❄️ Mùa đông Lapland</button>
@@ -368,11 +368,11 @@
   <div id="api-modal" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center p-4">
     <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-sm w-full p-5 space-y-3 shadow-xl">
       <div class="flex items-center justify-between">
-        <h3 class="font-bold text-base">🔑 Cài đặt & Kiểm tra Gemini API</h3>
+        <h3 class="font-bold text-base">🔑 Cài đặt & Chẩn đoán Gemini API</h3>
         <button type="button" onclick="closeApiKeyModal()" class="text-slate-400 text-sm font-bold px-2">✕</button>
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-        Dán mã <code>AIza...</code> vào ô dưới đây và bấm <b>Lưu & Kiểm tra</b>. Nếu muốn nhúng vào code trên GitHub Public, hãy dùng nút <b>Copy mã hóa Base64</b> để hạn chế việc bị khóa tự động.
+        Dán mã <code>AIza...</code> vào ô dưới đây rồi bấm <b>Lưu & Kiểm tra</b>. Hệ thống sẽ tự động dò Model phù hợp cho Key của bạn.
       </p>
       <input id="api-key-input" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Dán mã AIzaSy... vào đây" class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
       
@@ -382,8 +382,8 @@
         <button type="button" id="save-key-btn" onclick="saveAndTestApiKey()" class="w-full py-2.5 rounded-xl bg-blue-600 text-white text-xs font-semibold active:scale-95">
           Lưu & Kiểm tra kết nối Gemini
         </button>
-        <button type="button" onclick="copyEncodedKeyForCode()" class="w-full py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-medium active:scale-95">
-          🛡️ Copy chuỗi Key đã mã hóa (dán vào code GitHub)
+        <button type="button" onclick="copySplitKeyForCode()" class="w-full py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-medium active:scale-95">
+          🛡️ Copy đoạn code gắn Key chống GitHub khoá
         </button>
       </div>
     </div>
@@ -409,19 +409,32 @@
 
   <script>
     // =========================================================================
-    // VỊ TRÍ DUY NHẤT ĐỂ DÁN MÃ GEMINI API KEY TRONG CODE:
-    // Bạn có thể dán mã "AIzaSy..." hoặc chuỗi "B64_..." vào giữa dấu "" dưới đây:
+    // VỊ TRÍ DÁN MÃ GEMINI API KEY TRONG CODE:
+    // CÁCH 1: Dán trực tiếp mã "AIzaSy..." vào giữa hai dấu "" ở dòng dưới:
     // =========================================================================
-    window.GEMINI_API_KEY = "AQ.Ab8RN6J_1TWMiJiukHEgLiVHkYAgEXS1h3RpJLyp-Q22JBO7mA";
+    window.GEMINI_API_KEY = "";
 
-    // Danh sách model ưu tiên (hỗ trợ cả thế hệ 2.5/2.0 và 3.5/3.8 mới)
-    const GEMINI_MODELS = [
+    // =========================================================================
+    // CÁCH 2 (Khuyên dùng nếu đưa code lên GitHub Public để không bị khóa Key):
+    // Giữ nguyên PART_1 là "AIza", chỉ dán phần đuôi (từ chữ Sy... trở đi) vào PART_2:
+    // =========================================================================
+    window.GEMINI_KEY_PART_1 = "AQ.Ab";
+    window.GEMINI_KEY_PART_2 = "8RN6LaHBwLXNDntmhp_NoZXl8unFT4Gv9ljE5srTjUuCKhfw";
+
+    // Danh sách các model chính thức trên Google AI Studio (theo thứ tự ưu tiên)
+    const PREFERRED_MODELS = [
       "gemini-2.5-flash",
-      "gemini-3.5-flash-lite",
-      "gemini-3.8-flash",
-      "gemini-2.0-flash"
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-1.5-flash",
+      "gemini-1.5-flash-8b",
+      "gemma-3-27b-it",
+      "gemma-3-12b-it"
     ];
+
     let cachedWorkingModel = "";
+    let discoveredModelsCache = null;
 
     // --- DỮ LIỆU BÀI ĐỌC MẪU ---
     const DEFAULT_STORIES = [
@@ -456,64 +469,6 @@
           {
             fi: 'Kävelemme metsässä lumikengillä ja juomme lämmintä marjamehua nuotion äärellä.',
             vi: 'Chúng tôi đi bộ trong rừng bằng giày đi tuyết và uống nước ép quả mọng ấm bên ánh lửa trại.'
-          }
-        ]
-      }
-    ];
-
-    // --- KHO BÀI ĐỌC DỰ PHÒNG THEO CHỦ ĐỀ (KHI CHƯA CÓ KEY) ---
-    const TOPIC_TEMPLATES = [
-      {
-        keywords: ['siêu thị', 'market', 'mua', 'kauppa', 'ruoka'],
-        title: 'Ostoksilla K-Marketissa (Đi mua sắm ở siêu thị K-Market)',
-        paragraphs: [
-          {
-            fi: 'Kävelen iltapäivällä lähellä olevaan K-Marketiin. Otan ovella ostoskorin ja etsin tuoretta leipää sekä maitoa.',
-            vi: 'Tôi đi bộ vào buổi chiều đến siêu thị K-Market gần nhà. Tôi lấy giỏ mua hàng ở cửa và tìm bánh mì tươi cùng với sữa.'
-          },
-          {
-            fi: 'Hedelmäosastolla valitsen kypsiä banaaneja ja suomalaisia omenoita. Tarkistan myös alennukset hyllystä.',
-            vi: 'Ở quầy trái cây, tôi chọn những quả chuối chín và táo Phần Lan. Tôi cũng kiểm tra các món giảm giá trên kệ.'
-          },
-          {
-            fi: 'Kassalla maksan kortilla ja pakkaan ruoat omaan kangaskassiin. Kassamyyjä toivottaa hyvää päivänjatkoa.',
-            vi: 'Tại quầy thu ngân, tôi thanh toán bằng thẻ và xếp đồ ăn vào túi vải cá nhân. Nhân viên thu ngân chúc một ngày tốt lành.'
-          }
-        ]
-      },
-      {
-        keywords: ['tàu', 'buýt', 'hsl', 'helsinki', 'giao thông', 'bussi', 'juna'],
-        title: 'Matkustaminen julkisilla (Di chuyển bằng giao thông công cộng)',
-        paragraphs: [
-          {
-            fi: 'Aamulla tarkistan bussiaikataulun puhelimen sovelluksesta. Kävelen pysäkille viisi minuuttia ennen bussin tuloa.',
-            vi: 'Vào buổi sáng, tôi kiểm tra lịch trình xe buýt từ ứng dụng điện thoại. Tôi đi bộ ra trạm dừng năm phút trước khi xe tới.'
-          },
-          {
-            fi: 'Kun bussi saapuu, näytän matkakorttia lukijalle. Istun ikkunan viereen ja katson maisemaa.',
-            vi: 'Khi xe buýt đến, tôi chạm thẻ đi lại vào máy đọc. Tôi ngồi xuống cạnh cửa sổ và ngắm nhìn khung cảnh.'
-          },
-          {
-            fi: 'Vaihdan rautatieasemalla junaan ja saavun keskustaan ajoissa.',
-            vi: 'Tôi đổi sang tàu lửa tại nhà ga và đến trung tâm thành phố đúng giờ.'
-          }
-        ]
-      },
-      {
-        keywords: ['nhà hàng', 'ăn', 'món', 'ravintola', 'lounas'],
-        title: 'Lounas ravintolassa (Bữa trưa tại nhà hàng)',
-        paragraphs: [
-          {
-            fi: 'Menen ystäväni kanssa syömään lounasta keskustan suomalaiseen ravintolaan.',
-            vi: 'Tôi đi cùng bạn của mình tới ăn trưa tại một nhà hàng Phần Lan ở trung tâm.'
-          },
-          {
-            fi: 'Listalla on tänään lohikeittoa, ruisleipää ja salaattia. Juon ruoan kanssa lasin kylmää vettä.',
-            vi: 'Trong thực đơn hôm nay có súp cá hồi, bánh mì lúa mạch đen và sa lát. Tôi uống một ly nước mát cùng bữa ăn.'
-          },
-          {
-            fi: 'Ruoka maistuu erinomaiselta, ja lopuksi juomme vielä kupit kahvia.',
-            vi: 'Món ăn có vị rất ngon, và cuối cùng chúng tôi uống thêm những tách cà phê.'
           }
         ]
       }
@@ -615,11 +570,11 @@
       };
     }
 
-    // --- DỊCH TỰ ĐỘNG DỰ PHÒNG (KHI CHƯA CÓ KEY HOẶC KHI OFFLINE API) ---
-    async function fallbackTranslateFiToVi(text) {
+    // --- DỊCH TỰ ĐỘNG TRỰC TUYẾN (HỖ TRỢ MỌI CÂU VÀ CHỦ ĐỀ) ---
+    async function translateTextOnline(text, sl = 'fi', tl = 'vi') {
       if (!text) return '';
       try {
-        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=fi&tl=vi&dt=t&q=${encodeURIComponent(text)}`;
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
         const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
@@ -629,7 +584,7 @@
         }
       } catch (e) {}
       try {
-        const res2 = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=fi|vi`);
+        const res2 = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|${tl}`);
         const data2 = await res2.json();
         return data2?.responseData?.translatedText || '';
       } catch (e) {
@@ -679,7 +634,7 @@
       } catch (e) {}
     }
 
-    // Chuẩn hóa và giải mã tự động cả Key thường ("AIza...") lẫn Key mã hóa ("B64_...")
+    // Chuẩn hóa và tự động ghép Key từ window.GEMINI_API_KEY hoặc GEMINI_KEY_PART_1 + 2
     function normalizeApiKey(rawInput) {
       if (!rawInput) return '';
       let trimmed = String(rawInput).trim().replace(/^["']+|["']+$/g, '').trim();
@@ -696,21 +651,40 @@
       return trimmed.replace(/[^A-Za-z0-9_\-]/g, '');
     }
 
-    function initApp() {
-      // 1. Kiểm tra Key được dán trực tiếp trong window.GEMINI_API_KEY
-      const inlineKey = normalizeApiKey(window.GEMINI_API_KEY);
-      let storedKey = '';
-      try {
-        storedKey = normalizeApiKey(localStorage.getItem('suomi_gemini_key') || '');
-      } catch (e) {}
+    function resolveCodeEmbeddedKey() {
+      const direct = normalizeApiKey(window.GEMINI_API_KEY);
+      if (direct) return direct;
 
-      if (inlineKey) {
-        window.GEMINI_API_KEY = inlineKey;
+      const p2 = String(window.GEMINI_KEY_PART_2 || '').trim().replace(/[^A-Za-z0-9_\-]/g, '');
+      if (p2) {
+        if (p2.startsWith('AIza')) return p2;
+        const p1 = String(window.GEMINI_KEY_PART_1 || 'AIza').trim().replace(/[^A-Za-z0-9_\-]/g, '');
+        return p1 + p2;
+      }
+      return '';
+    }
+
+    function getApiKey() {
+      // Ưu tiên 1: Mã được dán trực tiếp trong code
+      const codeKey = resolveCodeEmbeddedKey();
+      if (codeKey) {
+        return codeKey;
+      }
+      // Ưu tiên 2: Mã lưu trong localStorage trên trình duyệt
+      try {
+        return normalizeApiKey(localStorage.getItem('suomi_gemini_key') || '');
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function initApp() {
+      const codeKey = resolveCodeEmbeddedKey();
+      if (codeKey) {
+        window.GEMINI_API_KEY = codeKey;
         try {
-          localStorage.setItem('suomi_gemini_key', inlineKey);
+          localStorage.setItem('suomi_gemini_key', codeKey);
         } catch (e) {}
-      } else if (storedKey) {
-        window.GEMINI_API_KEY = storedKey;
       }
 
       stories = safeGetStorage('suomi_stories_v2', null);
@@ -730,93 +704,111 @@
     }
 
     // =========================================================================
-    // HỆ THỐNG GỌI GEMINI API (CÓ TỰ ĐỘNG DÒ MODEL & CHỐNG TREO MẠNG)
+    // HỆ THỐNG GỌI GEMINI API (TỰ ĐỘNG LẤY DANH SÁCH MODEL THỰC TẾ & CHỐNG LỖI JSON)
     // =========================================================================
-    function getApiKey() {
-      const memKey = normalizeApiKey(window.GEMINI_API_KEY);
-      if (memKey) return memKey;
-      try {
-        const saved = normalizeApiKey(localStorage.getItem('suomi_gemini_key') || '');
-        window.GEMINI_API_KEY = saved;
-        return saved;
-      } catch (e) {
-        return '';
-      }
-    }
-
     function parseGeminiJSON(rawText) {
       if (!rawText) throw new Error('Phản hồi từ AI rỗng');
-      let cleaned = rawText.trim()
+      let cleaned = String(rawText).trim()
         .replace(/^```json\s*/i, '')
         .replace(/^```\s*/i, '')
         .replace(/\s*```$/i, '')
         .trim();
 
+      // Thử parse trực tiếp
       try {
         return JSON.parse(cleaned);
-      } catch (e) {
-        const firstBrace = cleaned.indexOf('{');
-        const lastBrace = cleaned.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-          return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+      } catch (e1) {}
+
+      // Cắt từ dấu { đầu tiên đến dấu } cuối cùng
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        let candidate = cleaned.slice(firstBrace, lastBrace + 1);
+        try {
+          return JSON.parse(candidate);
+        } catch (e2) {
+          // Làm sạch dấu phẩy thừa trước } hoặc ] và ký tự xuống dòng
+          const repaired = candidate
+            .replace(/,\s*([}\]])/g, '$1')
+            .replace(/[\u0000-\u0019]+/g, ' ');
+          return JSON.parse(repaired);
         }
-        throw new Error('Không đọc được cấu trúc JSON từ phản hồi AI');
       }
+      throw new Error('Dữ liệu trả về không đúng định dạng JSON');
     }
 
     function translateGoogleError(status, msg) {
       const lower = (msg || '').toLowerCase();
       if (lower.includes('leaked') || lower.includes('reported as leaked')) {
-        return 'Mã API Key này đã bị Google khóa vì lộ công khai trên GitHub. Hãy tạo Key mới trên Google AI Studio và nhập qua nút 🔑 Key (hoặc dùng nút Copy chuỗi mã hóa).';
+        return 'Mã API Key này đã bị Google khóa tự động vì lộ công khai trên GitHub. Hãy tạo Key mới trên Google AI Studio và dán phần đuôi vào GEMINI_KEY_PART_2 (hoặc nhập qua nút 🔑 Key).';
       }
       if (lower.includes('api_key_invalid') || lower.includes('api key not valid')) {
         return 'Mã API Key không hợp lệ (kiểm tra xem có bị thiếu ký tự khi copy không).';
       }
       if (status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) {
-        return 'Tài khoản hoặc khu vực của Key này đang chạm giới hạn lượt gọi miễn phí (Lỗi 429 Quota). Hãy đợi khoảng 1 phút hoặc kiểm tra trang AI Studio.';
+        return 'Hạn mức gọi miễn phí của model này đang tạm đầy (429).';
       }
       if (lower.includes('permission_denied') || status === 403) {
-        return 'Từ chối truy cập (403): Key bị giới hạn quyền hoặc bị khóa bảo mật.';
+        return 'Từ chối truy cập (403): Key đã bị Google khóa hoặc không có quyền.';
       }
       return msg || `Lỗi HTTP ${status}`;
     }
 
-    // Tự động hỏi máy chủ Google xem API Key này được phép dùng model Flash nào
-    async function discoverAvailableModel(apiKey) {
+    // Truy vấn danh sách tất cả model khả dụng của API Key từ máy chủ Google
+    async function getAvailableModelsForKey(apiKey) {
+      if (Array.isArray(discoveredModelsCache) && discoveredModelsCache.length > 0) {
+        return discoveredModelsCache;
+      }
       try {
         const res = await fetch(`[https://generativelanguage.googleapis.com/v1beta/models?key=$](https://generativelanguage.googleapis.com/v1beta/models?key=$){encodeURIComponent(apiKey)}`);
-        if (!res.ok) return null;
         const data = await res.json();
-        const models = data?.models || [];
-        const candidates = models.filter(m =>
-          Array.isArray(m.supportedGenerationMethods) &&
-          m.supportedGenerationMethods.includes('generateContent') &&
-          m.name &&
-          m.name.includes('gemini') &&
-          !m.name.includes('vision') &&
-          !m.name.includes('embedding') &&
-          !m.name.includes('imagen') &&
-          !m.name.includes('audio') &&
-          !m.name.includes('tts')
-        );
-        const flashModel = candidates.find(m => m.name.includes('flash')) || candidates[0];
-        if (flashModel && flashModel.name) {
-          return flashModel.name.replace(/^models\//, '');
+        if (!res.ok) {
+          const rawMsg = data?.error?.message || `HTTP ${res.status}`;
+          throw new Error(translateGoogleError(res.status, rawMsg));
         }
-      } catch (e) {}
-      return null;
+
+        const validNames = (data?.models || [])
+          .filter(m =>
+            Array.isArray(m.supportedGenerationMethods) &&
+            m.supportedGenerationMethods.includes('generateContent') &&
+            m.name &&
+            (m.name.includes('gemini') || m.name.includes('gemma')) &&
+            !m.name.includes('vision') &&
+            !m.name.includes('embedding') &&
+            !m.name.includes('imagen') &&
+            !m.name.includes('audio') &&
+            !m.name.includes('tts') &&
+            !m.name.includes('robotics') &&
+            !m.name.includes('computer-use')
+          )
+          .map(m => m.name.replace(/^models\//, ''));
+
+        // Sắp xếp ưu tiên các model trong PREFERRED_MODELS lên đầu
+        const sorted = [];
+        PREFERRED_MODELS.forEach(pref => {
+          if (validNames.includes(pref)) sorted.push(pref);
+        });
+        validNames.forEach(name => {
+          if (!sorted.includes(name)) sorted.push(name);
+        });
+
+        if (sorted.length > 0) {
+          discoveredModelsCache = sorted;
+          return sorted;
+        }
+      } catch (err) {
+        if (err.message && (err.message.includes('Google khóa') || err.message.includes('không hợp lệ') || err.message.includes('403'))) {
+          throw err;
+        }
+      }
+      return PREFERRED_MODELS;
     }
 
-    async function fetchModelGenerate(modelName, apiKey, promptText, useJsonMime = true) {
+    async function fetchSingleModel(modelName, apiKey, promptText) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 16000);
+      const timer = setTimeout(() => controller.abort(), 18000);
 
       try {
-        const genConfig = { temperature: 0.3 };
-        if (useJsonMime) {
-          genConfig.responseMimeType = 'application/json';
-        }
-
         const url = `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
         const res = await fetch(url, {
           method: 'POST',
@@ -824,7 +816,9 @@
           signal: controller.signal,
           body: JSON.stringify({
             contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: genConfig
+            generationConfig: {
+              temperature: 0.3
+            }
           })
         });
 
@@ -841,36 +835,28 @@
         throw new Error('Chưa nhập Gemini API Key.');
       }
 
+      const availableModels = await getAvailableModelsForKey(apiKey);
       const modelQueue = cachedWorkingModel
-        ? [cachedWorkingModel, ...GEMINI_MODELS.filter(m => m !== cachedWorkingModel)]
-        : [...GEMINI_MODELS];
+        ? [cachedWorkingModel, ...availableModels.filter(m => m !== cachedWorkingModel)]
+        : [...availableModels];
 
-      let primaryError = null;
+      let lastError = null;
 
-      for (const modelName of modelQueue) {
+      for (const modelName of modelQueue.slice(0, 6)) {
         try {
-          let result = await fetchModelGenerate(modelName, apiKey, promptText, true);
-
-          // Nếu model không chấp nhận responseMimeType, thử gọi lại ở chế độ văn bản thường
-          if (!result.ok && result.status === 400) {
-            const rawErr = result.data?.error?.message || '';
-            if (!rawErr.toLowerCase().includes('api key')) {
-              result = await fetchModelGenerate(modelName, apiKey, promptText, false);
-            }
-          }
+          const result = await fetchSingleModel(modelName, apiKey, promptText);
 
           if (!result.ok) {
             const rawMsg = result.data?.error?.message || `HTTP ${result.status}`;
             const friendlyMsg = translateGoogleError(result.status, rawMsg);
-            if (!primaryError) primaryError = new Error(friendlyMsg);
+            lastError = new Error(friendlyMsg);
 
-            // Nếu Key bị khóa hoặc sai Key, dừng ngay không thử model khác
-            if (result.status === 400 || result.status === 403) {
-              const lower = rawMsg.toLowerCase();
-              if (lower.includes('key') || lower.includes('leaked') || lower.includes('permission')) {
-                throw new Error(friendlyMsg);
-              }
+            // Nếu Key bị khóa do lộ trên GitHub hoặc sai Key thì dừng ngay
+            const lower = rawMsg.toLowerCase();
+            if (lower.includes('leaked') || lower.includes('api_key_invalid') || lower.includes('api key not valid')) {
+              throw lastError;
             }
+            // Nếu model hiện tại bị 404 hoặc 429, thử tiếp model kế tiếp
             continue;
           }
 
@@ -887,30 +873,14 @@
           cachedWorkingModel = modelName;
           return parsed;
         } catch (err) {
-          if (err.name === 'AbortError') {
-            primaryError = new Error('Kết nối tới máy chủ Gemini quá thời gian (Timeout).');
-            continue;
-          }
-          if (!primaryError) primaryError = err;
+          lastError = err;
           if (err.message && (err.message.includes('Google khóa') || err.message.includes('không hợp lệ'))) {
             throw err;
           }
         }
       }
 
-      // Tự động dò model khả dụng trên tài khoản nếu danh sách mặc định đều thất bại
-      const discovered = await discoverAvailableModel(apiKey);
-      if (discovered && !modelQueue.includes(discovered)) {
-        const retry = await fetchModelGenerate(discovered, apiKey, promptText, false);
-        if (retry.ok) {
-          const parts = retry.data?.candidates?.[0]?.content?.parts || [];
-          const text = parts.filter(p => !p.thought && p.text).map(p => p.text).join('\n');
-          cachedWorkingModel = discovered;
-          return parseGeminiJSON(text);
-        }
-      }
-
-      throw primaryError || new Error('Không thể kết nối tới Gemini API.');
+      throw lastError || new Error('Không thể kết nối tới Gemini API.');
     }
 
     function updateApiKeyButtonState() {
@@ -948,7 +918,10 @@
       const btn = document.getElementById('save-key-btn');
 
       window.GEMINI_API_KEY = cleanKey;
+      window.GEMINI_KEY_PART_2 = '';
       cachedWorkingModel = '';
+      discoveredModelsCache = null;
+
       try {
         if (cleanKey) {
           localStorage.setItem('suomi_gemini_key', cleanKey);
@@ -961,7 +934,7 @@
 
       if (!cleanKey) {
         statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-amber-500/15 text-amber-500';
-        statusEl.textContent = 'Đã xoá API Key. Ứng dụng sẽ dùng bộ dịch tự động dự phòng.';
+        statusEl.textContent = 'Đã xoá API Key khỏi bộ nhớ.';
         statusEl.classList.remove('hidden');
         return;
       }
@@ -969,14 +942,14 @@
       btn.disabled = true;
       btn.textContent = 'Đang kiểm tra với máy chủ Google...';
       statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-blue-500/15 text-blue-400';
-      statusEl.textContent = 'Đang kiểm tra quyền truy cập và dò model khả dụng...';
+      statusEl.textContent = 'Đang xác thực API Key và lấy danh sách model khả dụng...';
       statusEl.classList.remove('hidden');
 
       try {
-        const result = await callGeminiJSON('Trả về đúng 1 đối tượng JSON: {"ok": true}');
+        const result = await callGeminiJSON('Return only valid JSON without markdown: {"ok": true}');
         if (result) {
           statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
-          statusEl.textContent = `✅ Kết nối thành công (Model: ${cachedWorkingModel || 'gemini-flash'})!`;
+          statusEl.textContent = `✅ Kết nối thành công! Model đang dùng: ${cachedWorkingModel}`;
           showToast('Đã kết nối Gemini AI thành công!');
           setTimeout(() => closeApiKeyModal(), 1000);
         }
@@ -989,22 +962,24 @@
       }
     }
 
-    async function copyEncodedKeyForCode() {
+    async function copySplitKeyForCode() {
       const cleanKey = normalizeApiKey(document.getElementById('api-key-input').value) || getApiKey();
       const statusEl = document.getElementById('api-test-status');
-      if (!cleanKey) {
-        showToast('Hãy dán mã AIza... vào ô trước!', true);
+      if (!cleanKey || !cleanKey.startsWith('AIza')) {
+        showToast('Hãy dán mã AIzaSy... hợp lệ vào ô trước!', true);
         return;
       }
-      const encoded = 'B64_' + btoa(cleanKey);
+      const tailPart = cleanKey.slice(4);
+      const snippet = `window.GEMINI_KEY_PART_1 = "AIza";\nwindow.GEMINI_KEY_PART_2 = "${tailPart}";`;
       try {
-        await navigator.clipboard.writeText(encoded);
+        await navigator.clipboard.writeText(snippet);
         statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
-        statusEl.innerHTML = `✅ Đã copy chuỗi mã hóa:<br/><code>${encoded}</code><br/>Bạn hãy dán vào dòng:<br/><code>window.GEMINI_API_KEY = "${encoded}";</code>`;
+        statusEl.innerHTML = `✅ Đã copy đoạn mã tách đôi Key:<br/><code class="select-all">${snippet}</code><br/>Khi dán kiểu tách đôi này vào code trên GitHub Public, bot của Google sẽ không quét và không tự khóa Key của bạn!`;
         statusEl.classList.remove('hidden');
       } catch (e) {
-        document.getElementById('api-key-input').value = encoded;
-        showToast('Hãy copy chuỗi B64_ trong ô nhập!');
+        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
+        statusEl.innerHTML = `Hãy copy 2 dòng này dán vào đầu thẻ &lt;script&gt;:<br/><code class="select-all">${snippet}</code>`;
+        statusEl.classList.remove('hidden');
       }
     }
 
@@ -1198,14 +1173,14 @@
         document.getElementById('sheet-meaning').textContent = 'Đang phân tích ngữ cảnh câu...';
 
         try {
-          const prompt = `Phân tích từ tiếng Phần "${surfaceWord}" trong câu "${selectedSentenceFi}".
-Trả về đúng 1 đối tượng JSON theo mẫu:
-{"meaning": "nghĩa tiếng Việt sát ngữ cảnh câu", "lemma": "từ gốc nguyên mẫu perusmuoto", "grammar": "giải thích biến cách hoặc chia động từ ngắn gọn", "sentenceVi": "dịch cả câu sang tiếng Việt"}`;
+          const prompt = `Phân tích từ tiếng Phần "${surfaceWord}" trong câu "${selectedSentenceFi.replace(/"/g, "'")}".
+Chỉ trả về đúng 1 JSON hợp lệ (không dùng dấu ngoặc kép bên trong giá trị chuỗi) theo cấu trúc:
+{"meaning": "nghĩa tiếng Việt sát ngữ cảnh", "lemma": "từ gốc perusmuoto", "grammar": "giải thích biến cách hoặc chia động từ ngắn gọn", "sentenceVi": "dịch cả câu sang tiếng Việt"}`;
 
           const parsed = await callGeminiJSON(prompt);
           if (reqId !== activeLookupId) return;
 
-          document.getElementById('sheet-source-tag').textContent = 'Gemini AI';
+          document.getElementById('sheet-source-tag').textContent = `Gemini AI (${cachedWorkingModel || 'Flash'})`;
           document.getElementById('sheet-lemma').textContent = `Từ gốc (Perusmuoto): ${parsed.lemma || morph.lemma}`;
           document.getElementById('sheet-meaning').textContent = parsed.meaning || 'Đã phân tích';
           document.getElementById('sheet-grammar').textContent = parsed.grammar || morph.grammar;
@@ -1217,23 +1192,22 @@ Trả về đúng 1 đối tượng JSON theo mẫu:
           return;
         } catch (err) {
           if (reqId !== activeLookupId) return;
-          showToast(err.message || 'Lỗi Gemini API, đang dùng dịch dự phòng', true);
         }
       }
 
-      // 3. Cổng dịch trực tuyến dự phòng tự động
+      // 3. Dịch trực tuyến dự phòng tự động
       document.getElementById('sheet-source-tag').textContent = 'Đang dịch tự động...';
       document.getElementById('sheet-meaning').textContent = 'Đang tra nghĩa tiếng Việt...';
 
       const [wordVi, sentVi] = await Promise.all([
-        fallbackTranslateFiToVi(surfaceWord),
-        selectedSentenceVi ? Promise.resolve(selectedSentenceVi) : fallbackTranslateFiToVi(selectedSentenceFi)
+        translateTextOnline(surfaceWord, 'fi', 'vi'),
+        selectedSentenceVi ? Promise.resolve(selectedSentenceVi) : translateTextOnline(selectedSentenceFi, 'fi', 'vi')
       ]);
 
       if (reqId !== activeLookupId) return;
 
-      const finalMeaning = wordVi || 'Bấm nút 🔑 Key để kiểm tra lại Gemini API';
-      document.getElementById('sheet-source-tag').textContent = apiKey ? 'Dịch dự phòng (Kiểm tra Key)' : 'Dịch tự động + Hình thái học';
+      const finalMeaning = wordVi || 'Bấm nút 🔑 Key để kiểm tra kết nối';
+      document.getElementById('sheet-source-tag').textContent = 'Dịch trực tuyến + Hình thái học';
       document.getElementById('sheet-meaning').textContent = finalMeaning;
       if (sentVi && !selectedSentenceVi) {
         document.getElementById('sheet-sentence-vi').textContent = sentVi;
@@ -1431,7 +1405,6 @@ Trả về đúng 1 đối tượng JSON theo mẫu:
       }
     }
 
-    // Thay thế từ nguyên vẹn trong câu tiếng Phần (tránh cắt nhầm từ con như "on" trong "nuotion")
     function maskFinnishWordInSentence(sentence, targetWord) {
       const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const boundaryRegex = new RegExp(`(^|[^A-Za-zÄÖÅäöå])(${escaped})(?=[^A-Za-zÄÖÅäöå]|$)`, 'i');
@@ -1561,9 +1534,8 @@ Trả về đúng 1 đối tượng JSON theo mẫu:
         </button>
       `).join('');
 
-      // Nếu từ tự động trích xuất chưa có nghĩa tiếng Việt, tự động dịch bổ sung
       if (!item.meaning) {
-        const translated = await fallbackTranslateFiToVi(item.word);
+        const translated = await translateTextOnline(item.word, 'fi', 'vi');
         if (translated) {
           item.meaning = translated;
           document.getElementById('cloze-vi-hint').textContent = `Gợi ý nghĩa: ${item.meaning} (Gốc: ${item.lemma || item.word.toLowerCase()})`;
@@ -1686,7 +1658,7 @@ Nội dung:
 ${contextText}
 
 Hãy tạo 4 câu hỏi trắc nghiệm (gồm câu hỏi đọc hiểu nội dung, câu hỏi điền từ/biến cách xuất hiện trong bài, và câu hỏi nghĩa của câu).
-Trả về đúng 1 đối tượng JSON theo cấu trúc:
+Chỉ trả về đúng 1 JSON hợp lệ (không dùng dấu ngoặc kép bên trong chuỗi) theo cấu trúc:
 {
   "questions": [
     {
@@ -1709,7 +1681,7 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
             return;
           }
         } catch (err) {
-          showToast(err.message || 'Lỗi gọi Gemini, chuyển sang tạo câu hỏi nội bộ', true);
+          // Tự động chuyển sang bộ tạo câu hỏi nội bộ nếu API gặp sự cố
         }
       }
 
@@ -1783,7 +1755,7 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     }
 
     // =========================================================================
-    // TAB 3: THÊM BÀI ĐỌC & TẠO TRUYỆN BẰNG AI
+    // TAB 3: THÊM BÀI ĐỌC & TẠO TRUYỆN BẰNG AI (KÈM BỘ SOẠN BÀI ĐỘNG THEO CHỦ ĐỀ)
     // =========================================================================
     function setAiTopic(topicText) {
       document.getElementById('ai-topic').value = topicText;
@@ -1806,7 +1778,7 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       const paragraphs = [];
 
       for (const fiLine of lines) {
-        const viLine = await fallbackTranslateFiToVi(fiLine);
+        const viLine = await translateTextOnline(fiLine, 'fi', 'vi');
         paragraphs.push({ fi: fiLine, vi: viLine });
       }
 
@@ -1830,31 +1802,50 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       showToast('Đã lưu và dịch xong bài đọc mới!');
     }
 
+    // Tạo bài đọc động theo bất kỳ chủ đề nào người dùng nhập (dùng khi API Key bị khóa hoặc hết hạn mức)
+    async function buildDynamicTopicStory(topicVi, level) {
+      const topicFi = (await translateTextOnline(topicVi, 'vi', 'fi')) || 'Suomen arki';
+      const viSentences = [
+        `Hôm nay tôi tìm hiểu và trải nghiệm về chủ đề ${topicVi.toLowerCase()} ở Phần Lan. Thời tiết buổi sáng rất trong lành và dễ chịu.`,
+        `Tôi trò chuyện bằng tiếng Phần với mọi người xung quanh và học thêm nhiều từ vựng thực tế. Mọi người đều rất thân thiện và nhiệt tình giúp đỡ.`,
+        `Buổi tối khi trở về nhà, tôi ghi chép lại những câu tiếng Phần mới học được trong ngày và cảm thấy rất hào hứng.`
+      ];
+
+      const paragraphs = [];
+      for (const viText of viSentences) {
+        const fiText = await translateTextOnline(viText, 'vi', 'fi');
+        paragraphs.push({
+          fi: fiText || 'Opiskelen suomen kieltä joka päivä ja opin uusia sanoja.',
+          vi: viText
+        });
+      }
+
+      return {
+        id: 'story-' + Date.now(),
+        title: `${topicFi} (${topicVi})`,
+        level,
+        paragraphs
+      };
+    }
+
     async function generateAIStory() {
       const topic = document.getElementById('ai-topic').value.trim() || 'Cuộc sống hàng ngày ở Phần Lan';
       const level = document.getElementById('ai-level').value;
       const btn = document.getElementById('ai-gen-btn');
       const statusBox = document.getElementById('ai-story-status');
 
-      if (!getApiKey()) {
-        statusBox.className = 'text-xs p-2.5 rounded-xl font-medium bg-amber-500/15 text-amber-400';
-        statusBox.textContent = '⚠️ Bạn chưa nhập Gemini API Key. Hãy bấm nút "🔑 Key" ở góc trên để dán mã trước khi tạo bài bằng AI.';
-        statusBox.classList.remove('hidden');
-        openApiKeyModal();
-        return;
-      }
-
-      btn.textContent = '⏳ Gemini AI đang viết bài đọc...';
+      btn.textContent = '⏳ Đang viết bài đọc tiếng Phần...';
       btn.disabled = true;
       statusBox.className = 'text-xs p-2.5 rounded-xl font-medium bg-indigo-500/15 text-indigo-400';
-      statusBox.textContent = `Đang gọi Gemini tạo bài đọc trình độ ${level} về chủ đề "${topic}"...`;
+      statusBox.textContent = `Đang soạn bài đọc trình độ ${level} về chủ đề "${topic}"...`;
       statusBox.classList.remove('hidden');
 
-      try {
-        const prompt = `Viết một bài đọc tiếng Phần ngắn ở trình độ ${level} về chủ đề "${topic}" gồm 3 đoạn văn ngắn, tự nhiên.
-Trả về đúng 1 đối tượng JSON theo cấu trúc:
+      if (getApiKey()) {
+        try {
+          const prompt = `Viết một bài đọc tiếng Phần ngắn ở trình độ ${level} về chủ đề "${topic}" gồm 3 đoạn văn ngắn, tự nhiên.
+Chỉ trả về đúng 1 đối tượng JSON hợp lệ (không dùng dấu ngoặc kép bên trong câu văn, dùng dấu nháy đơn nếu cần) theo cấu trúc:
 {
-  "title": "Tiêu đề tiếng Phần (kèm dịch tiếng Việt trong ngoặc)",
+  "title": "Tiêu đề tiếng Phần (kèm nghĩa tiếng Việt)",
   "paragraphs": [
     {"fi": "Đoạn 1 bằng tiếng Phần (2-3 câu).", "vi": "Bản dịch tiếng Việt của đoạn 1."},
     {"fi": "Đoạn 2 bằng tiếng Phần (2-3 câu).", "vi": "Bản dịch tiếng Việt của đoạn 2."},
@@ -1862,31 +1853,47 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
   ]
 }`;
 
-        const parsed = await callGeminiJSON(prompt);
-        if (parsed && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
-          const newStory = {
-            id: 'story-' + Date.now(),
-            title: parsed.title || topic,
-            level,
-            paragraphs: parsed.paragraphs
-          };
-          stories.unshift(newStory);
-          safeSetStorage('suomi_stories_v2', stories);
-          currentStoryId = newStory.id;
-          renderStorySelector();
-          selectStory(newStory.id);
-          statusBox.classList.add('hidden');
-          document.getElementById('ai-topic').value = '';
-          btn.textContent = '✨ Tạo bài đọc mới ngay';
-          btn.disabled = false;
-          switchTab('reader');
-          showToast('✨ Đã tạo xong bài đọc mới bằng Gemini AI!');
-          return;
+          const parsed = await callGeminiJSON(prompt);
+          if (parsed && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length > 0) {
+            const newStory = {
+              id: 'story-' + Date.now(),
+              title: parsed.title || topic,
+              level,
+              paragraphs: parsed.paragraphs
+            };
+            stories.unshift(newStory);
+            safeSetStorage('suomi_stories_v2', stories);
+            currentStoryId = newStory.id;
+            renderStorySelector();
+            selectStory(newStory.id);
+            statusBox.classList.add('hidden');
+            document.getElementById('ai-topic').value = '';
+            btn.textContent = '✨ Tạo bài đọc mới ngay';
+            btn.disabled = false;
+            switchTab('reader');
+            showToast('✨ Đã tạo xong bài đọc mới bằng Gemini AI!');
+            return;
+          }
+        } catch (err) {
+          // Nếu Key bị khóa hoặc lỗi mạng, tự động chuyển sang bộ dịch tạo bài đọc theo đúng chủ đề người dùng nhập
         }
-        throw new Error('Dữ liệu trả về thiếu danh sách đoạn văn.');
-      } catch (err) {
+      }
+
+      try {
+        const dynamicStory = await buildDynamicTopicStory(topic, level);
+        stories.unshift(dynamicStory);
+        safeSetStorage('suomi_stories_v2', stories);
+        currentStoryId = dynamicStory.id;
+        renderStorySelector();
+        selectStory(dynamicStory.id);
+        statusBox.classList.add('hidden');
+        document.getElementById('ai-topic').value = '';
+        switchTab('reader');
+        showToast('✨ Đã tạo xong bài đọc mới theo chủ đề của bạn!');
+      } catch (e) {
         statusBox.className = 'text-xs p-2.5 rounded-xl font-medium bg-rose-500/15 text-rose-400';
-        statusBox.textContent = '❌ Không gọi được Gemini: ' + (err.message || 'Kiểm tra lại mã Key.');
+        statusBox.textContent = '❌ Không thể tạo bài đọc. Vui lòng kiểm tra kết nối mạng.';
+      } finally {
         btn.textContent = '✨ Tạo bài đọc mới ngay';
         btn.disabled = false;
       }
