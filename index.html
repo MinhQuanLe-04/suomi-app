@@ -7,6 +7,15 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="SuomiLingQ" />
   <title>SuomiLingQ – Học Tiếng Phần Qua Bài Đọc</title>
+  <link rel="preconnect" href="https://generativelanguage.googleapis.com" crossorigin />
+  <script>
+    // Áp dụng giao diện sáng/tối đã lưu ngay từ đầu để không bị nháy màu khi mở app
+    try {
+      if (JSON.parse(localStorage.getItem('suomi_prefs_v1') || '{}').theme === 'light') {
+        document.documentElement.classList.remove('dark');
+      }
+    } catch (e) {}
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -372,10 +381,10 @@
         <button type="button" onclick="closeApiKeyModal()" class="text-slate-400 text-sm font-bold px-2">✕</button>
       </div>
       <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-        Dán mã <code>AIza...</code> mới của bạn vào ô dưới đây rồi bấm <b>Lưu & Kiểm tra</b>. Mã lưu tại đây sẽ được ưu tiên cao nhất và không bị code cũ ghi đè.
+        Dán mã API Key của bạn (dạng <code>AQ.Ab...</code> hoặc <code>AIza...</code>) vào ô dưới đây rồi bấm <b>Lưu & Kiểm tra</b>. Mã lưu tại đây sẽ được ưu tiên cao nhất và không bị code cũ ghi đè.
       </p>
-      <input id="api-key-input" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Dán mã AIzaSy... vào đây" class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
-      
+      <input id="api-key-input" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Dán mã AQ.Ab... hoặc AIzaSy... vào đây" class="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+
       <div id="api-test-status" class="hidden text-xs p-2.5 rounded-xl font-medium leading-relaxed break-words"></div>
 
       <div class="flex flex-col gap-2 pt-1">
@@ -409,23 +418,62 @@
 
   <script>
     // =========================================================================
-    // VỊ TRÍ DÁN MÃ GEMINI API KEY TRONG CODE:
-    // LƯU Ý QUAN TRỌNG: Nếu đưa file lên GitHub Public, KHÔNG dán trực tiếp chữ "AIza..."
-    // vì sau vài giờ Google quét thấy chữ "AIza" trên GitHub sẽ tự động khoá Key!
-    // Hãy bấm nút "🛡️ Copy chuỗi REV_" trong mục 🔑 Key rồi dán chuỗi "REV_..." vào đây:
+    // GEMINI API KEY
+    // Khuyến nghị: để trống ở đây và dán key qua nút "🔑 Key" trên giao diện.
+    // Key sẽ được lưu trong localStorage của trình duyệt, không nằm trong file.
+    //
+    // Nếu bắt buộc phải ghi key vào code (ví dụ file đưa lên GitHub), hãy bấm
+    // nút "🛡️ Copy chuỗi REV_" trong mục 🔑 Key rồi dán chuỗi "REV_..." vào đây,
+    // để công cụ quét key không phát hiện được.
+    // Hỗ trợ cả key mới dạng "AQ.Ab..." lẫn key cũ dạng "AIza...".
     // =========================================================================
-    window.GEMINI_API_KEY = "AQ.Ab"+"8RN6LaHBwLXNDntmhp_NoZXl8unFT4Gv9ljE5srTjUuCKhfw";
+    window.GEMINI_API_KEY = "";
 
-    // Danh sách model Gemini chuẩn
+    // =========================================================================
+    // CẤU HÌNH CHUNG
+    // =========================================================================
+    const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+
+    // Danh sách model dự phòng (chỉ dùng khi không lấy được danh sách model từ Google).
+    // Bình thường app tự lấy danh sách model đang hoạt động của key và ưu tiên bản Flash mới nhất.
     const PREFERRED_MODELS = [
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
-      "gemini-1.5-flash"
+      "gemini-flash-latest",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash",
+      "gemini-2.5-flash"
     ];
 
-    let cachedWorkingModel = "";
-    let discoveredModelsCache = null;
+    const MAX_MODEL_TRIES = 3;           // thử tối đa 3 model để không cạn hạn mức miễn phí
+    const GENERATE_TIMEOUT = 45000;
+    const LIST_TIMEOUT = 15000;
+    const TRANSLATE_TIMEOUT = 8000;
+    const MODEL_CACHE_TTL = 12 * 60 * 60 * 1000;
+
+    const STORAGE = {
+      stories: 'suomi_stories_v2',
+      words: 'suomi_words_v2',
+      keyOverride: 'suomi_gemini_key_override',
+      keyLegacy: 'suomi_gemini_key',
+      models: 'suomi_models_cache_v1',
+      prefs: 'suomi_prefs_v1'
+    };
+
+    // Các class Tailwind dùng lại nhiều lần trong JS
+    const CLS = {
+      navActive: 'flex flex-col items-center py-1 text-blue-600 dark:text-blue-400 font-semibold text-xs',
+      navIdle: 'flex flex-col items-center py-1 text-slate-400 font-medium text-xs',
+      subtabClozeOn: 'py-2 rounded-lg bg-blue-600 text-white shadow-sm transition-all',
+      subtabQuizOn: 'py-2 rounded-lg bg-indigo-600 text-white shadow-sm transition-all',
+      subtabOff: 'py-2 rounded-lg text-slate-500 dark:text-slate-400 transition-all',
+      choice: 'py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/20 text-sm font-medium border border-slate-200 dark:border-slate-700 active:scale-95',
+      quizOpt: 'w-full text-left px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/15 border border-slate-200 dark:border-slate-700 text-xs font-medium transition-all active:scale-[0.99]',
+      quizOptCorrect: 'w-full text-left px-3.5 py-2.5 rounded-xl bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 text-xs font-bold',
+      quizOptWrong: 'w-full text-left px-3.5 py-2.5 rounded-xl bg-rose-500/20 border-2 border-rose-500 text-rose-600 dark:text-rose-300 text-xs font-semibold',
+      quizOptDim: 'w-full text-left px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 opacity-60 border border-slate-200 dark:border-slate-700 text-xs',
+      statusBtn: 'px-2.5 py-1 rounded-lg transition-colors ',
+      apiBtnOk: 'px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 active:scale-95',
+      apiBtnMissing: 'px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 active:scale-95'
+    };
 
     // Các bối cảnh ngẫu nhiên giúp bài đọc tạo ra luôn mới mẻ, không bao giờ lặp lại câu cũ
     const STORY_ANGLES = [
@@ -529,94 +577,85 @@
       "nuotion": { lemma: "nuotio", meaning: "của lửa trại", grammar: "Genitive (-n) đi trước hậu giới từ 'äärellä'" },
       "äärellä": { lemma: "äärellä", meaning: "ở bên cạnh / quanh", grammar: "Hậu giới từ (Postposition)" }
     };
+    // Bỏ prototype để các từ như "constructor", "valueOf"... không bị nhận nhầm là mục từ điển
+    Object.setPrototypeOf(BUILTIN_DICT, null);
+    const DICT_WORDS = Object.keys(BUILTIN_DICT);
 
-    // --- BỘ PHÂN TÍCH HẬU TỐ 15 BIẾN CÁCH NỘI BỘ ---
+    // --- BỘ PHÂN TÍCH HẬU TỐ 15 BIẾN CÁCH NỘI BỘ (thứ tự = ưu tiên, hậu tố dài đứng trước) ---
+    const MORPH_RULES = [
+      { suffix: 'ssani', name: 'Inessive + Sở hữu (-ssani)', desc: 'Ở trong ... của tôi' },
+      { suffix: 'ssa', name: 'Inessive (-ssa)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
+      { suffix: 'ssä', name: 'Inessive (-ssä)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
+      { suffix: 'sta', name: 'Elative (-sta)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
+      { suffix: 'stä', name: 'Elative (-stä)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
+      { suffix: 'lla', name: 'Adessive (-lla)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
+      { suffix: 'llä', name: 'Adessive (-llä)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
+      { suffix: 'lta', name: 'Ablative (-lta)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
+      { suffix: 'ltä', name: 'Ablative (-ltä)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
+      { suffix: 'lle', name: 'Allative (-lle)', desc: 'Hướng lên bề mặt hoặc hướng tới ai đó ("đến / cho...")' },
+      { suffix: 'ksi', name: 'Translative (-ksi)', desc: 'Chỉ sự biến đổi trạng thái ("trở thành...")' },
+      { suffix: 'tta', name: 'Abessive (-tta)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
+      { suffix: 'ttä', name: 'Abessive (-ttä)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
+      { suffix: 'iin', name: 'Illative (-iin)', desc: 'Chỉ hướng đi vào bên trong ("vào trong...")' },
+      { suffix: 'an', name: 'Illative/Genitive (-an)', desc: 'Chỉ hướng vào trong hoặc sở hữu cách' },
+      { suffix: 'mme', name: 'Ngôi thứ 1 số nhiều (-mme)', desc: 'Động từ chia ngôi "chúng tôi" hoặc sở hữu "của chúng tôi"' },
+      { suffix: 'tte', name: 'Ngôi thứ 2 số nhiều (-tte)', desc: 'Động từ chia ngôi "các bạn"' },
+      { suffix: 'vat', name: 'Ngôi thứ 3 số nhiều (-vat)', desc: 'Động từ chia ngôi "họ"' },
+      { suffix: 'vät', name: 'Ngôi thứ 3 số nhiều (-vät)', desc: 'Động từ chia ngôi "họ"' },
+      { suffix: 'n', name: 'Genitive / Ngôi thứ 1 (-n)', desc: 'Biến cách sở hữu/tân ngữ (-n) hoặc động từ ngôi "Minä" (-n)' }
+    ];
+
     function analyzeFinnishMorphology(word) {
       const w = word.toLowerCase();
-      const rules = [
-        { suffix: 'ssani', name: 'Inessive + Sở hữu (-ssani)', desc: 'Ở trong ... của tôi' },
-        { suffix: 'ssa', name: 'Inessive (-ssa)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
-        { suffix: 'ssä', name: 'Inessive (-ssä)', desc: 'Chỉ vị trí ở bên trong ("trong...")' },
-        { suffix: 'sta', name: 'Elative (-sta)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
-        { suffix: 'stä', name: 'Elative (-stä)', desc: 'Chỉ hướng đi ra từ bên trong hoặc nguồn gốc ("từ...")' },
-        { suffix: 'lla', name: 'Adessive (-lla)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
-        { suffix: 'llä', name: 'Adessive (-llä)', desc: 'Ở trên bề mặt, tại địa điểm, hoặc bằng công cụ ("trên / bằng...")' },
-        { suffix: 'lta', name: 'Ablative (-lta)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
-        { suffix: 'ltä', name: 'Ablative (-ltä)', desc: 'Rời khỏi bề mặt hoặc nhận từ ai đó ("từ...")' },
-        { suffix: 'lle', name: 'Allative (-lle)', desc: 'Hướng lên bề mặt hoặc hướng tới ai đó ("đến / cho...")' },
-        { suffix: 'ksi', name: 'Translative (-ksi)', desc: 'Chỉ sự biến đổi trạng thái ("trở thành...")' },
-        { suffix: 'tta', name: 'Abessive (-tta)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
-        { suffix: 'ttä', name: 'Abessive (-ttä)', desc: 'Chỉ sự thiếu vắng ("mà không có...")' },
-        { suffix: 'iin', name: 'Illative (-iin)', desc: 'Chỉ hướng đi vào bên trong ("vào trong...")' },
-        { suffix: 'an', name: 'Illative/Genitive (-an)', desc: 'Chỉ hướng vào trong hoặc sở hữu cách' },
-        { suffix: 'mme', name: 'Ngôi thứ 1 số nhiều (-mme)', desc: 'Động từ chia ngôi "chúng tôi" hoặc sở hữu "của chúng tôi"' },
-        { suffix: 'tte', name: 'Ngôi thứ 2 số nhiều (-tte)', desc: 'Động từ chia ngôi "các bạn"' },
-        { suffix: 'vat', name: 'Ngôi thứ 3 số nhiều (-vat)', desc: 'Động từ chia ngôi "họ"' },
-        { suffix: 'vät', name: 'Ngôi thứ 3 số nhiều (-vät)', desc: 'Động từ chia ngôi "họ"' },
-        { suffix: 'n', name: 'Genitive / Ngôi thứ 1 (-n)', desc: 'Biến cách sở hữu/tân ngữ (-n) hoặc động từ ngôi "Minä" (-n)' }
-      ];
-      for (const r of rules) {
+      for (const r of MORPH_RULES) {
         if (w.length > r.suffix.length + 2 && w.endsWith(r.suffix)) {
-          const stem = w.slice(0, -r.suffix.length);
-          return {
-            lemma: stem,
-            grammar: `${r.name}: ${r.desc}`
-          };
+          return { lemma: w.slice(0, -r.suffix.length), grammar: `${r.name}: ${r.desc}` };
         }
       }
-      return {
-        lemma: w,
-        grammar: 'Danh từ / Động từ tiếng Phần ở dạng cơ bản hoặc Partitive'
-      };
+      return { lemma: w, grammar: 'Danh từ / Động từ tiếng Phần ở dạng cơ bản hoặc Partitive' };
     }
 
-    // --- DỊCH TỰ ĐỘNG CHO VĂN BẢN TỰ DÁN ---
-    async function translateTextOnline(text, sl = 'fi', tl = 'vi') {
-      if (!text) return '';
-      try {
-        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data?.[0])) {
-            return data[0].map(item => item[0]).join('');
-          }
-        }
-      } catch (e) {}
-      try {
-        const res2 = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|${tl}`);
-        const data2 = await res2.json();
-        return data2?.responseData?.translatedText || '';
-      } catch (e) {
-        return '';
+    // =========================================================================
+    // TIỆN ÍCH CHUNG
+    // =========================================================================
+    const $ = id => document.getElementById(id);
+
+    // Chống chèn HTML: mọi nội dung đến từ AI / người dùng dán vào đều phải qua hàm này trước khi đưa vào innerHTML
+    const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c]);
+    const escapeRegExp = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Chữ cái Unicode (gồm cả ä, ö, å, š, ž...)
+    const WORD_SPLIT_RE = /(\p{L}+)/u;
+    const WORD_MATCH_RE = /\p{L}+/gu;
+    const LONG_WORD_RE = /\p{L}{4,}/gu;
+
+    function shuffle(arr) {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
       }
+      return a;
     }
 
-    // --- TRẠNG THÁI ỨNG DỤNG ---
-    let stories = [];
-    let currentStoryId = 'story-1';
-    let wordStatusMap = {};
-    let selectedTokenEl = null;
-    let selectedWordKey = '';
-    let selectedSentenceFi = '';
-    let selectedSentenceVi = '';
-    let selectedParaIndex = 0;
-    let activeLookupId = 0;
-    let reviewQueue = [];
-    let currentReviewIndex = 0;
-    let currentChoicesList = [];
-    let currentQuizData = [];
-    let cachedFinnishVoice = null;
+    function hashStr(str) {
+      let h = 5381;
+      for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+      return String(h >>> 0);
+    }
 
-    function showToast(msg, isError = false) {
-      const banner = document.getElementById('toast-banner');
-      banner.textContent = msg;
-      banner.className = `fixed top-14 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold shadow-lg transition-all duration-200 max-w-xs text-center ${
-        isError ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
-      }`;
-      banner.classList.remove('hidden');
-      clearTimeout(banner._timer);
-      banner._timer = setTimeout(() => banner.classList.add('hidden'), 3500);
+    async function mapLimit(items, limit, fn) {
+      const out = new Array(items.length);
+      let next = 0;
+      const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (next < items.length) {
+          const idx = next++;
+          out[idx] = await fn(items[idx], idx);
+        }
+      });
+      await Promise.all(workers);
+      return out;
     }
 
     function safeGetStorage(key, fallback) {
@@ -634,74 +673,276 @@
       } catch (e) {}
     }
 
-    // Giải mã cả 3 định dạng: Key thường ("AIza..."), Base64 ("B64_..."), và Đảo ngược ("REV_...")
+    function showToast(msg, isError = false) {
+      const banner = $('toast-banner');
+      banner.textContent = msg;
+      banner.className = `fixed top-14 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold shadow-lg transition-all duration-200 max-w-xs text-center ${
+        isError ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+      }`;
+      clearTimeout(banner._timer);
+      banner._timer = setTimeout(() => banner.classList.add('hidden'), 3500);
+    }
+
+    // =========================================================================
+    // TRẠNG THÁI ỨNG DỤNG
+    // =========================================================================
+    let stories = [];
+    let currentStoryId = 'story-1';
+    let wordStatusMap = Object.create(null);
+    let prefs = {};
+    let selectedTokenEl = null;
+    let selectedWordKey = '';
+    let selectedSentenceFi = '';
+    let selectedSentenceVi = '';
+    let selectedParaIndex = 0;
+    let activeLookupId = 0;
+    let reviewQueue = [];
+    let currentReviewIndex = 0;
+    let renderToken = 0;
+    let currentQuizData = [];
+    let quizScopeKey = '';
+    let cachedFinnishVoice = null;
+    let sheetHideTimer = 0;
+
+    const currentStory = () => stories.find(s => s.id === currentStoryId) || stories[0];
+
+    // --- Lưu từ vựng: gộp nhiều lần lưu liên tiếp thành một, và chắc chắn lưu khi rời app ---
+    let wordsDirty = false;
+    let wordsSaveTimer = 0;
+    function saveWordsSoon() {
+      wordsDirty = true;
+      clearTimeout(wordsSaveTimer);
+      wordsSaveTimer = setTimeout(flushWords, 250);
+    }
+    function flushWords() {
+      clearTimeout(wordsSaveTimer);
+      if (!wordsDirty) return;
+      wordsDirty = false;
+      safeSetStorage(STORAGE.words, wordStatusMap);
+    }
+
+    // --- Cài đặt giao diện (sáng/tối, cỡ chữ, bài đang đọc) ---
+    function savePrefs() {
+      safeSetStorage(STORAGE.prefs, prefs);
+    }
+    function applyPrefs() {
+      document.documentElement.classList.toggle('dark', prefs.theme !== 'light');
+      if (typeof prefs.fontSize === 'number') {
+        document.documentElement.style.setProperty('--reader-font-size', `${prefs.fontSize}rem`);
+      }
+    }
+
+    // =========================================================================
+    // MẠNG: FETCH CÓ TIMEOUT + LỖI TIẾNG VIỆT
+    // =========================================================================
+    class ApiError extends Error {
+      constructor(message, fatal = false) {
+        super(message);
+        this.name = 'ApiError';
+        this.fatal = fatal; // lỗi "fatal" = thử model khác cũng vô ích (sai key, bị khoá...)
+      }
+    }
+
+    async function fetchJSON(url, options = {}, timeoutMs = 20000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        const data = await res.json().catch(() => null);
+        return { ok: res.ok, status: res.status, data };
+      } catch (err) {
+        if (err && err.name === 'AbortError') {
+          throw new ApiError('Kết nối tới máy chủ quá thời gian (Timeout).');
+        }
+        throw new ApiError('Không kết nối được tới máy chủ. Hãy kiểm tra mạng rồi thử lại.');
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    const errMsg = r => (r && r.data && r.data.error && r.data.error.message) || '';
+
+    function classifyGoogleError(status, msg) {
+      const lower = String(msg || '').toLowerCase();
+      if (lower.includes('leaked')) {
+        return new ApiError('Mã API Key của bạn đã bị Google khóa tự động vì lộ công khai (ví dụ đưa lên GitHub). Hãy tạo Key mới trong Google AI Studio rồi dán vào nút "🔑 Key" (đừng ghi key trực tiếp vào file code công khai).', true);
+      }
+      if (lower.includes('api_key_invalid') || lower.includes('api key not valid') || lower.includes('api key expired')) {
+        return new ApiError('Mã API Key không hợp lệ, đã hết hạn hoặc đã bị xoá. Hãy kiểm tra lại nút 🔑 Key.', true);
+      }
+      if (status === 401 || lower.includes('access_token_type_unsupported') || lower.includes('unauthenticated')) {
+        return new ApiError('Google không chấp nhận Key này (Lỗi 401). Hãy xoá Key cũ, tạo Key mới trực tiếp trong Google AI Studio rồi dán lại vào nút "🔑 Key".', true);
+      }
+      if (status === 403 || lower.includes('permission_denied')) {
+        return new ApiError('Từ chối truy cập (Lỗi 403): Key này không có quyền dùng Gemini API hoặc đã bị khóa. Hãy tạo Key mới trên Google AI Studio.', true);
+      }
+      if (status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) {
+        return new ApiError('Tài khoản đang chạm giới hạn số lượt gọi miễn phí (Lỗi 429). Hãy đợi khoảng 30–60 giây rồi bấm lại.');
+      }
+      if (status === 404) {
+        return new ApiError('Model này không còn khả dụng (Lỗi 404). App sẽ tự thử model khác.');
+      }
+      if (status >= 500) {
+        return new ApiError(`Máy chủ Gemini đang quá tải hoặc gặp sự cố (Lỗi ${status}). Hãy thử lại sau ít phút.`);
+      }
+      return new ApiError(msg || `Lỗi kết nối HTTP ${status}`);
+    }
+
+    // --- DỊCH TỰ ĐỘNG CHO VĂN BẢN TỰ DÁN (có cache + timeout) ---
+    const translateCache = new Map();
+    async function translateTextOnline(text, sl = 'fi', tl = 'vi') {
+      if (!text) return '';
+      const cacheKey = `${sl}|${tl}|${text}`;
+      if (translateCache.has(cacheKey)) return translateCache.get(cacheKey);
+
+      let out = '';
+      try {
+        const r = await fetchJSON(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`, {}, TRANSLATE_TIMEOUT);
+        if (r.ok && Array.isArray(r.data && r.data[0])) {
+          out = r.data[0].map(item => item[0]).join('');
+        }
+      } catch (e) {}
+      if (!out) {
+        try {
+          const r2 = await fetchJSON(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sl}|${tl}`, {}, TRANSLATE_TIMEOUT);
+          out = (r2.data && r2.data.responseData && r2.data.responseData.translatedText) || '';
+        } catch (e) {}
+      }
+      if (out) translateCache.set(cacheKey, out);
+      return out;
+    }
+
+    // =========================================================================
+    // GEMINI API KEY
+    // =========================================================================
+    // Giải mã định dạng Base64 ("B64_...") và Đảo ngược ("REV_...") hoặc key thường.
+    // QUAN TRỌNG: key mới của Google có dạng "AQ.Ab..." chứa dấu "." nên phải giữ lại dấu chấm.
     function normalizeApiKey(rawInput) {
       if (!rawInput) return '';
-      let trimmed = String(rawInput).trim().replace(/^["']+|["']+$/g, '').trim();
-      if (trimmed.startsWith('REV_')) {
+      let t = String(rawInput).trim().replace(/^["']+|["']+$/g, '').trim();
+      if (t.startsWith('REV_')) {
         try {
-          const reversedB64 = trimmed.slice(4).split('').reverse().join('');
-          trimmed = atob(reversedB64);
+          t = atob(t.slice(4).split('').reverse().join(''));
         } catch (e) {}
-      } else if (trimmed.startsWith('B64_')) {
+      } else if (t.startsWith('B64_')) {
         try {
-          trimmed = atob(trimmed.slice(4));
-        } catch (e) {}
-      } else if (!trimmed.startsWith('AIza') && trimmed.length > 24) {
-        try {
-          const decoded = atob(trimmed);
-          if (decoded.startsWith('AIza')) trimmed = decoded;
+          t = atob(t.slice(4));
         } catch (e) {}
       }
-      return trimmed.replace(/[^A-Za-z0-9_\-]/g, '');
+      return t.replace(/[^A-Za-z0-9_.\-]/g, '');
     }
 
-    // SỬA LỖI GHI ĐÈ KEY: Ưu tiên Key người dùng nhập mới trên giao diện iPhone hơn Key cũ trong file HTML
+    // Ưu tiên Key người dùng nhập trên giao diện (localStorage) hơn Key trong file HTML.
+    let apiKeyCache = null;
     function getApiKey() {
+      if (apiKeyCache !== null) return apiKeyCache;
+      let key = '';
       try {
-        const userSavedKey = normalizeApiKey(localStorage.getItem('suomi_gemini_key_override') || localStorage.getItem('suomi_gemini_key') || '');
-        if (userSavedKey) return userSavedKey;
+        key = normalizeApiKey(localStorage.getItem(STORAGE.keyOverride) || localStorage.getItem(STORAGE.keyLegacy) || '');
       } catch (e) {}
-
-      const codeKey = normalizeApiKey(window.GEMINI_API_KEY);
-      if (codeKey) return codeKey;
-
-      return '';
+      if (!key) key = normalizeApiKey(window.GEMINI_API_KEY);
+      apiKeyCache = key;
+      return key;
     }
 
-    function initApp() {
-      stories = safeGetStorage('suomi_stories_v2', null);
-      if (!Array.isArray(stories) || stories.length === 0) {
-        stories = JSON.parse(JSON.stringify(DEFAULT_STORIES));
-      }
+    function setApiKey(cleanKey) {
+      try {
+        localStorage.removeItem(STORAGE.keyLegacy);
+        if (cleanKey) localStorage.setItem(STORAGE.keyOverride, cleanKey);
+        else localStorage.removeItem(STORAGE.keyOverride);
+      } catch (e) {}
+      window.GEMINI_API_KEY = cleanKey || '';
+      apiKeyCache = null;
+      cachedWorkingModel = '';
+      discoveredModelsCache = null;
+      clearModelCache();
+    }
 
-      // Tự động dọn các bài đọc bị lỗi lặp câu từ bản cũ (nếu có)
-      stories = stories.filter(s => {
-        const firstVi = s?.paragraphs?.[0]?.vi || '';
-        return !firstVi.includes('Thời tiết buổi sáng rất trong lành và dễ chịu');
-      });
-      if (stories.length === 0) {
-        stories = JSON.parse(JSON.stringify(DEFAULT_STORIES));
-      }
+    function updateApiKeyButtonState() {
+      const btn = $('api-key-btn');
+      const hasKey = Boolean(getApiKey());
+      btn.textContent = hasKey ? '🔑 Đã có Key' : '🔑 Key';
+      btn.className = hasKey ? CLS.apiBtnOk : CLS.apiBtnMissing;
+    }
 
-      wordStatusMap = safeGetStorage('suomi_words_v2', {});
-      currentStoryId = stories[0].id;
+    function openApiKeyModal() {
+      const modal = $('api-modal');
+      $('api-key-input').value = getApiKey();
+      $('api-test-status').classList.add('hidden');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
 
-      renderStorySelector();
-      selectStory(currentStoryId);
-      updateStatsBadge();
+    function closeApiKeyModal() {
+      const modal = $('api-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    async function saveAndTestApiKey() {
+      const cleanKey = normalizeApiKey($('api-key-input').value);
+      const statusEl = $('api-test-status');
+      const btn = $('save-key-btn');
+
+      setApiKey(cleanKey);
       updateApiKeyButtonState();
-      initVoices();
-      initReaderDelegation();
-      initSwipeToDismiss();
+
+      if (!cleanKey) {
+        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-amber-500/15 text-amber-500';
+        statusEl.textContent = 'Đã xoá API Key khỏi bộ nhớ.';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Đang kiểm tra với máy chủ Google...';
+      statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-blue-500/15 text-blue-400';
+      statusEl.textContent = 'Đang xác thực API Key với máy chủ Gemini...';
+
+      try {
+        const result = await callGeminiJSON('Trả về đúng 1 JSON: {"ok": true}', 0.2);
+        if (result) {
+          statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
+          statusEl.textContent = `✅ Kết nối thành công! Model đang hoạt động: ${cachedWorkingModel}`;
+          showToast('Đã kết nối Gemini AI thành công!');
+          setTimeout(closeApiKeyModal, 1000);
+        }
+      } catch (err) {
+        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-rose-500/15 text-rose-400';
+        statusEl.textContent = '❌ ' + (err.message || 'Lỗi kết nối.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Lưu & Kiểm tra kết nối Gemini';
+      }
+    }
+
+    // Mã hóa đảo ngược chuỗi để khi dán vào window.GEMINI_API_KEY trên GitHub không bị quét trúng
+    async function copyObfuscatedKeyForCode() {
+      const cleanKey = normalizeApiKey($('api-key-input').value) || getApiKey();
+      const statusEl = $('api-test-status');
+      if (!cleanKey || cleanKey.startsWith('REV_') || cleanKey.startsWith('B64_')) {
+        showToast('Hãy dán mã API Key hợp lệ vào ô trước!', true);
+        return;
+      }
+      const token = `REV_${btoa(cleanKey).split('').reverse().join('')}`;
+      try {
+        await navigator.clipboard.writeText(token);
+        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
+        statusEl.innerHTML = `✅ Đã copy chuỗi mã hóa đảo chiều:<br/><code class="select-all">${esc(token)}</code><br/>Hãy dán chuỗi này vào <code>window.GEMINI_API_KEY = "${esc(token)}";</code> trong code để GitHub khó quét được Key của bạn!`;
+      } catch (e) {
+        $('api-key-input').value = token;
+        showToast('Hãy copy chuỗi REV_ trong ô nhập!');
+      }
     }
 
     // =========================================================================
-    // HỆ THỐNG GỌI GEMINI API (CÓ ÉP KIỂU JSON & BÁO LỖI RÕ RÀNG)
+    // HỆ THỐNG GỌI GEMINI API (ÉP KIỂU JSON, CHỌN MODEL TỰ ĐỘNG, BÁO LỖI RÕ RÀNG)
     // =========================================================================
+    let cachedWorkingModel = '';
+    let discoveredModelsCache = null;
+
     function parseGeminiJSON(rawText) {
       if (!rawText) throw new Error('Phản hồi từ AI rỗng');
-      let cleaned = String(rawText).trim()
+      const cleaned = String(rawText).trim()
         .replace(/^```json\s*/i, '')
         .replace(/^```\s*/i, '')
         .replace(/\s*```$/i, '')
@@ -714,7 +955,7 @@
       const firstBrace = cleaned.indexOf('{');
       const lastBrace = cleaned.lastIndexOf('}');
       if (firstBrace !== -1 && lastBrace > firstBrace) {
-        let candidate = cleaned.slice(firstBrace, lastBrace + 1);
+        const candidate = cleaned.slice(firstBrace, lastBrace + 1);
         try {
           return JSON.parse(candidate);
         } catch (e2) {
@@ -727,103 +968,106 @@
       throw new Error('Không đọc được định dạng JSON từ phản hồi của AI');
     }
 
-    function translateGoogleError(status, msg) {
-      const lower = (msg || '').toLowerCase();
-      if (lower.includes('leaked') || lower.includes('reported as leaked')) {
-        return 'Mã API Key của bạn đã bị Google khóa tự động vì lộ công khai trên GitHub! Bạn hãy vào Google AI Studio tạo 1 Key mới và dán vào nút "🔑 Key" trên iPhone (không dán chữ AIza trực tiếp lên GitHub).';
+    function extractGeminiText(data) {
+      const parts = (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+      const texts = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text);
+      return (texts.length ? texts : parts.map(p => p.text || '')).join('\n');
+    }
+
+    // Chấm điểm model để ưu tiên bản Flash mới nhất, ổn định hơn bản preview
+    function modelRank(name) {
+      if (/flash-latest$/.test(name) && !/lite/.test(name)) return 1000;
+      const m = name.match(/gemini-(\d+(?:\.\d+)?)/);
+      const ver = m ? parseFloat(m[1]) : 0;
+      const stableBonus = /preview|exp|\d{2}-\d{2}/.test(name) ? 0 : 0.05;
+      return ver + stableBonus;
+    }
+
+    function sortModels(names) {
+      const byRank = (a, b) => modelRank(b) - modelRank(a);
+      const flash = names.filter(n => /flash/.test(n) && !/lite/.test(n)).sort(byRank);
+      const lite = names.filter(n => /flash/.test(n) && /lite/.test(n)).sort(byRank);
+      const others = names.filter(n => !/flash/.test(n)).sort(byRank);
+      return [...flash, ...lite, ...others];
+    }
+
+    // Cache danh sách model 12 giờ (gắn với mã băm của key) để mỗi lần mở app đỡ tốn 1 lượt gọi
+    function readModelCache(apiKey) {
+      const c = safeGetStorage(STORAGE.models, null);
+      if (c && c.tag === hashStr(apiKey) && Array.isArray(c.models) && c.models.length && Date.now() - c.ts < MODEL_CACHE_TTL) {
+        return c.models;
       }
-      if (lower.includes('api_key_invalid') || lower.includes('api key not valid')) {
-        return 'Mã API Key không hợp lệ hoặc đã bị xoá trên Google AI Studio. Hãy kiểm tra lại nút 🔑 Key.';
-      }
-      if (status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) {
-        return 'Tài khoản đang chạm giới hạn số lượt gọi miễn phí mỗi phút (Lỗi 429). Hãy đợi khoảng 30–60 giây rồi bấm lại.';
-      }
-      if (lower.includes('permission_denied') || status === 403) {
-        return 'Từ chối truy cập (Lỗi 403): Mã API Key này đã bị khóa bảo mật. Hãy tạo mã Key mới trên Google AI Studio.';
-      }
-      return msg || `Lỗi kết nối HTTP ${status}`;
+      return null;
+    }
+    function writeModelCache(apiKey, models) {
+      safeSetStorage(STORAGE.models, { tag: hashStr(apiKey), ts: Date.now(), models });
+    }
+    function clearModelCache() {
+      try { localStorage.removeItem(STORAGE.models); } catch (e) {}
+    }
+    function forgetModel(modelName) {
+      if (cachedWorkingModel === modelName) cachedWorkingModel = '';
+      discoveredModelsCache = null;
+      clearModelCache();
     }
 
     async function getAvailableModelsForKey(apiKey) {
       if (Array.isArray(discoveredModelsCache) && discoveredModelsCache.length > 0) {
         return discoveredModelsCache;
       }
+      const cached = readModelCache(apiKey);
+      if (cached) {
+        discoveredModelsCache = cached;
+        return cached;
+      }
+
       try {
-        const res = await fetch(`[https://generativelanguage.googleapis.com/v1beta/models?key=$](https://generativelanguage.googleapis.com/v1beta/models?key=$){encodeURIComponent(apiKey)}`);
-        const data = await res.json();
-        if (!res.ok) {
-          const rawMsg = data?.error?.message || `HTTP ${res.status}`;
-          throw new Error(translateGoogleError(res.status, rawMsg));
-        }
+        const r = await fetchJSON(`${GEMINI_BASE_URL}/models?key=${encodeURIComponent(apiKey)}&pageSize=1000`, {}, LIST_TIMEOUT);
+        if (!r.ok) {
+          const err = classifyGoogleError(r.status, errMsg(r));
+          if (err.fatal) throw err;
+        } else {
+          const validNames = ((r.data && r.data.models) || [])
+            .filter(m =>
+              Array.isArray(m.supportedGenerationMethods) &&
+              m.supportedGenerationMethods.includes('generateContent') &&
+              m.name &&
+              m.name.includes('gemini') &&
+              !/vision|embedding|imagen|image|audio|live|tts|robotics|computer-use/.test(m.name)
+            )
+            .map(m => m.name.replace(/^models\//, ''));
 
-        const validNames = (data?.models || [])
-          .filter(m =>
-            Array.isArray(m.supportedGenerationMethods) &&
-            m.supportedGenerationMethods.includes('generateContent') &&
-            m.name &&
-            m.name.includes('gemini') &&
-            !m.name.includes('vision') &&
-            !m.name.includes('embedding') &&
-            !m.name.includes('imagen') &&
-            !m.name.includes('audio') &&
-            !m.name.includes('tts') &&
-            !m.name.includes('robotics') &&
-            !m.name.includes('computer-use')
-          )
-          .map(m => m.name.replace(/^models\//, ''));
-
-        const sorted = [];
-        PREFERRED_MODELS.forEach(pref => {
-          if (validNames.includes(pref)) sorted.push(pref);
-        });
-        validNames.forEach(name => {
-          if (!sorted.includes(name)) sorted.push(name);
-        });
-
-        if (sorted.length > 0) {
-          discoveredModelsCache = sorted;
-          return sorted;
+          const sorted = sortModels(validNames);
+          if (sorted.length > 0) {
+            discoveredModelsCache = sorted;
+            writeModelCache(apiKey, sorted);
+            return sorted;
+          }
         }
       } catch (err) {
-        if (err.message && (err.message.includes('Google khóa') || err.message.includes('không hợp lệ') || err.message.includes('403'))) {
-          throw err;
-        }
+        if (err.fatal) throw err;
       }
       return PREFERRED_MODELS;
     }
 
-    async function fetchSingleModel(modelName, apiKey, promptText, temp = 0.5, useJsonMime = true) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 20000);
-
-      try {
-        const generationConfig = { temperature: temp };
-        if (useJsonMime) {
-          generationConfig.responseMimeType = 'application/json';
-        }
-
-        const url = `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
-        const res = await fetch(url, {
+    function requestModel(modelName, apiKey, promptText, temperature, useJsonMime) {
+      const generationConfig = { temperature };
+      if (useJsonMime) generationConfig.responseMimeType = 'application/json';
+      return fetchJSON(
+        `${GEMINI_BASE_URL}/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig
-          })
-        });
-
-        const data = await res.json();
-        return { ok: res.ok, status: res.status, data };
-      } finally {
-        clearTimeout(timer);
-      }
+          body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig })
+        },
+        GENERATE_TIMEOUT
+      );
     }
 
     async function callGeminiJSON(promptText, temperature = 0.5) {
       const apiKey = getApiKey();
       if (!apiKey) {
-        throw new Error('Bạn chưa nhập Gemini API Key. Hãy bấm nút "🔑 Key" ở góc trên để dán mã.');
+        throw new ApiError('Bạn chưa nhập Gemini API Key. Hãy bấm nút "🔑 Key" ở góc trên để dán mã.', true);
       }
 
       const availableModels = await getAvailableModelsForKey(apiKey);
@@ -833,161 +1077,38 @@
 
       let lastError = null;
 
-      // Chỉ thử tối đa 3 model đầu tiên để không làm cạn kiệt hạn mức gọi miễn phí
-      for (const modelName of modelQueue.slice(0, 3)) {
+      for (const modelName of modelQueue.slice(0, MAX_MODEL_TRIES)) {
         try {
-          let result = await fetchSingleModel(modelName, apiKey, promptText, temperature, true);
+          let r = await requestModel(modelName, apiKey, promptText, temperature, true);
 
-          // Nếu model không hỗ trợ responseMimeType, thử lại không cần ép kiểu
-          if (!result.ok && result.status === 400) {
-            const rawErr = (result.data?.error?.message || '').toLowerCase();
-            if (!rawErr.includes('key') && !rawErr.includes('leaked')) {
-              result = await fetchSingleModel(modelName, apiKey, promptText, temperature, false);
-            }
+          // Một số model không hỗ trợ responseMimeType: thử lại không ép kiểu
+          if (!r.ok && r.status === 400 && !classifyGoogleError(r.status, errMsg(r)).fatal) {
+            r = await requestModel(modelName, apiKey, promptText, temperature, false);
           }
 
-          if (!result.ok) {
-            const rawMsg = result.data?.error?.message || `HTTP ${result.status}`;
-            const friendlyMsg = translateGoogleError(result.status, rawMsg);
-            lastError = new Error(friendlyMsg);
-
-            const lower = rawMsg.toLowerCase();
-            if (lower.includes('leaked') || lower.includes('api_key_invalid') || lower.includes('api key not valid') || result.status === 403) {
-              throw lastError;
-            }
+          if (!r.ok) {
+            const err = classifyGoogleError(r.status, errMsg(r));
+            if (err.fatal) throw err;
+            if (r.status === 404) forgetModel(modelName);
+            lastError = err;
             continue;
           }
 
-          const parts = result.data?.candidates?.[0]?.content?.parts || [];
-          const nonThoughtTexts = parts
-            .filter(p => !p.thought && typeof p.text === 'string')
-            .map(p => p.text);
-
-          const combinedText = nonThoughtTexts.length > 0
-            ? nonThoughtTexts.join('\n')
-            : parts.map(p => p.text || '').join('\n');
-
-          const parsed = parseGeminiJSON(combinedText);
+          const parsed = parseGeminiJSON(extractGeminiText(r.data));
           cachedWorkingModel = modelName;
           return parsed;
         } catch (err) {
-          if (err.name === 'AbortError') {
-            lastError = new Error('Kết nối tới máy chủ Gemini quá thời gian (Timeout).');
-            continue;
-          }
+          if (err.fatal) throw err;
           lastError = err;
-          if (err.message && (err.message.includes('Google khóa') || err.message.includes('không hợp lệ') || err.message.includes('403'))) {
-            throw err;
-          }
         }
       }
 
-      throw lastError || new Error('Không thể kết nối tới Gemini API.');
+      throw lastError || new ApiError('Không thể kết nối tới Gemini API.');
     }
 
-    function updateApiKeyButtonState() {
-      const btn = document.getElementById('api-key-btn');
-      const hasKey = Boolean(getApiKey());
-      if (hasKey) {
-        btn.textContent = '🔑 Đã có Key';
-        btn.className = 'px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 active:scale-95';
-      } else {
-        btn.textContent = '🔑 Key';
-        btn.className = 'px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 active:scale-95';
-      }
-    }
-
-    function openApiKeyModal() {
-      const modal = document.getElementById('api-modal');
-      const input = document.getElementById('api-key-input');
-      const statusEl = document.getElementById('api-test-status');
-      input.value = getApiKey();
-      statusEl.classList.add('hidden');
-      modal.classList.remove('hidden');
-      modal.classList.add('flex');
-    }
-
-    function closeApiKeyModal() {
-      const modal = document.getElementById('api-modal');
-      modal.classList.add('hidden');
-      modal.classList.remove('flex');
-    }
-
-    async function saveAndTestApiKey() {
-      const rawVal = document.getElementById('api-key-input').value;
-      const cleanKey = normalizeApiKey(rawVal);
-      const statusEl = document.getElementById('api-test-status');
-      const btn = document.getElementById('save-key-btn');
-
-      cachedWorkingModel = '';
-      discoveredModelsCache = null;
-
-      try {
-        if (cleanKey) {
-          localStorage.setItem('suomi_gemini_key_override', cleanKey);
-          localStorage.setItem('suomi_gemini_key', cleanKey);
-          window.GEMINI_API_KEY = cleanKey;
-        } else {
-          localStorage.removeItem('suomi_gemini_key_override');
-          localStorage.removeItem('suomi_gemini_key');
-          window.GEMINI_API_KEY = '';
-        }
-      } catch (e) {}
-
-      updateApiKeyButtonState();
-
-      if (!cleanKey) {
-        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-amber-500/15 text-amber-500';
-        statusEl.textContent = 'Đã xoá API Key khỏi bộ nhớ.';
-        statusEl.classList.remove('hidden');
-        return;
-      }
-
-      btn.disabled = true;
-      btn.textContent = 'Đang kiểm tra với máy chủ Google...';
-      statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-blue-500/15 text-blue-400';
-      statusEl.textContent = 'Đang xác thực API Key với máy chủ Gemini...';
-      statusEl.classList.remove('hidden');
-
-      try {
-        const result = await callGeminiJSON('Trả về đúng 1 JSON: {"ok": true}', 0.2);
-        if (result) {
-          statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
-          statusEl.textContent = `✅ Kết nối thành công! Model đang hoạt động: ${cachedWorkingModel}`;
-          showToast('Đã kết nối Gemini AI thành công!');
-          setTimeout(() => closeApiKeyModal(), 1000);
-        }
-      } catch (err) {
-        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-rose-500/15 text-rose-400';
-        statusEl.textContent = '❌ ' + (err.message || 'Lỗi kết nối.');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Lưu & Kiểm tra kết nối Gemini';
-      }
-    }
-
-    // Mã hóa đảo ngược chuỗi để khi dán vào window.GEMINI_API_KEY trên GitHub không bao giờ bị quét trúng
-    async function copyObfuscatedKeyForCode() {
-      const cleanKey = normalizeApiKey(document.getElementById('api-key-input').value) || getApiKey();
-      const statusEl = document.getElementById('api-test-status');
-      if (!cleanKey || !cleanKey.startsWith('AIza')) {
-        showToast('Hãy dán mã AIzaSy... hợp lệ vào ô trước!', true);
-        return;
-      }
-      const reversedB64 = btoa(cleanKey).split('').reverse().join('');
-      const token = `REV_${reversedB64}`;
-      try {
-        await navigator.clipboard.writeText(token);
-        statusEl.className = 'text-xs p-2.5 rounded-xl font-medium bg-emerald-500/15 text-emerald-400';
-        statusEl.innerHTML = `✅ Đã copy chuỗi mã hóa đảo chiều:<br/><code class="select-all">${token}</code><br/>Hãy dán chuỗi này vào <code>window.GEMINI_API_KEY = "${token}";</code> trong code để GitHub không thể quét được Key của bạn!`;
-        statusEl.classList.remove('hidden');
-      } catch (e) {
-        document.getElementById('api-key-input').value = token;
-        showToast('Hãy copy chuỗi REV_ trong ô nhập!');
-      }
-    }
-
-    // --- GIỌNG ĐỌC TIẾNG PHẦN (TTS) ---
+    // =========================================================================
+    // GIỌNG ĐỌC TIẾNG PHẦN (TTS)
+    // =========================================================================
     function initVoices() {
       if (!('speechSynthesis' in window)) return;
       const findVoice = () => {
@@ -1009,8 +1130,7 @@
     }
 
     function speakSelectedWord() {
-      const word = document.getElementById('sheet-word').textContent;
-      speakFinnish(word);
+      speakFinnish($('sheet-word').textContent);
     }
 
     function speakSelectedSentence() {
@@ -1018,179 +1138,391 @@
     }
 
     function speakCurrentStory() {
-      const story = stories.find(s => s.id === currentStoryId);
+      const story = currentStory();
       if (!story) return;
-      const fullText = story.paragraphs.map(p => p.fi).join(' ');
-      speakFinnish(fullText);
+      speakFinnish(story.paragraphs.map(p => p.fi).join(' '));
+    }
+
+    // =========================================================================
+    // DỮ LIỆU BÀI ĐỌC: CHUẨN HOÁ & LƯU
+    // =========================================================================
+    // Dữ liệu từ AI hoặc từ bộ nhớ cũ có thể thiếu trường: luôn chuẩn hoá trước khi dùng
+    function sanitizeParagraphs(list) {
+      if (!Array.isArray(list)) return [];
+      return list
+        .map(p => ({ fi: String((p && p.fi) ?? '').trim(), vi: String((p && p.vi) ?? '').trim() }))
+        .filter(p => p.fi);
+    }
+
+    function normalizeStories(list) {
+      if (!Array.isArray(list)) return [];
+      return list
+        .map(s => ({
+          id: String((s && s.id) ?? ''),
+          title: String((s && s.title) || 'Bài đọc'),
+          level: String((s && s.level) || 'A1'),
+          paragraphs: sanitizeParagraphs(s && s.paragraphs)
+        }))
+        .filter(s => s.id && s.paragraphs.length > 0);
+    }
+
+    const cloneDefaults = () => JSON.parse(JSON.stringify(DEFAULT_STORIES));
+    const saveStories = () => safeSetStorage(STORAGE.stories, stories);
+
+    function initApp() {
+      prefs = safeGetStorage(STORAGE.prefs, {}) || {};
+      applyPrefs();
+
+      stories = normalizeStories(safeGetStorage(STORAGE.stories, null));
+      // Tự động dọn các bài đọc bị lỗi lặp câu từ bản cũ (nếu có)
+      stories = stories.filter(s => !(s.paragraphs[0].vi || '').includes('Thời tiết buổi sáng rất trong lành và dễ chịu'));
+      if (stories.length === 0) stories = cloneDefaults();
+
+      const savedWords = safeGetStorage(STORAGE.words, {});
+      wordStatusMap = Object.assign(Object.create(null), savedWords && typeof savedWords === 'object' && !Array.isArray(savedWords) ? savedWords : {});
+
+      currentStoryId = stories.some(s => s.id === prefs.lastStory) ? prefs.lastStory : stories[0].id;
+
+      renderStorySelector();
+      selectStory(currentStoryId);
+      updateStatsBadge();
+      updateApiKeyButtonState();
+      initVoices();
+      initEventHandlers();
+    }
+
+    function initEventHandlers() {
+      // Trình đọc: chạm vào từ hoặc nút "Ôn phần"
+      $('reader-content').addEventListener('click', e => {
+        const partBtn = e.target.closest('[data-review-part]');
+        if (partBtn) {
+          openReview(currentStoryId, partBtn.dataset.reviewPart);
+          return;
+        }
+        const token = e.target.closest('.word-token');
+        if (token) handleWordTap(token);
+      });
+
+      // Ôn tập: chọn đáp án điền từ
+      $('cloze-choices').addEventListener('click', e => {
+        const btn = e.target.closest('[data-choice]');
+        if (!btn) return;
+        $('cloze-input').value = btn.dataset.choice;
+        checkClozeAnswer();
+      });
+      $('cloze-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') checkClozeAnswer();
+      });
+
+      // Ôn tập: câu hỏi AI
+      $('quiz-container').addEventListener('click', e => {
+        const opt = e.target.closest('[data-q][data-o]');
+        if (opt) {
+          answerQuizQuestion(Number(opt.dataset.q), Number(opt.dataset.o));
+          return;
+        }
+        const speak = e.target.closest('[data-speak-quote]');
+        if (speak) speakQuizQuote(Number(speak.dataset.speakQuote));
+      });
+
+      // Hộp thoại API key: bấm ra ngoài hoặc nhấn Esc để đóng
+      $('api-modal').addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeApiKeyModal();
+      });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+          closeBottomSheet();
+          closeApiKeyModal();
+        }
+      });
+
+      initSwipeToDismiss();
+
+      // Đảm bảo không mất dữ liệu khi thoát app đột ngột
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushWords();
+      });
+      window.addEventListener('pagehide', flushWords);
+
+      // Lỗi bất đồng bộ không bị nuốt mất
+      window.addEventListener('unhandledrejection', e => {
+        const msg = e.reason && e.reason.message;
+        if (msg) showToast(msg, true);
+      });
     }
 
     // =========================================================================
     // TAB 1: TRÌNH ĐỌC & XOÁ BÀI ĐỌC
     // =========================================================================
     function renderStorySelector() {
-      const sel = document.getElementById('story-selector');
-      sel.innerHTML = stories.map(s => `<option value="${s.id}">${s.level || 'A1'} – ${s.title}</option>`).join('');
+      const sel = $('story-selector');
+      sel.innerHTML = stories.map(s => `<option value="${esc(s.id)}">${esc(s.level || 'A1')} – ${esc(s.title)}</option>`).join('');
       if (!stories.some(s => s.id === currentStoryId)) {
-        currentStoryId = stories[0]?.id || '';
+        currentStoryId = (stories[0] && stories[0].id) || '';
       }
       sel.value = currentStoryId;
       syncReviewStoryDropdown();
     }
 
-    function selectStory(storyId) {
-      currentStoryId = storyId;
-      document.getElementById('delete-confirm-box').classList.add('hidden');
-      const story = stories.find(s => s.id === storyId) || stories[0];
-      if (!story) return;
-
-      document.getElementById('story-title').textContent = story.title;
-      document.getElementById('story-level').textContent = story.level || 'A1';
-
-      const container = document.getElementById('reader-content');
-      container.innerHTML = story.paragraphs.map((p, pIdx) => {
-        const tokensHtml = tokenizeParagraph(p.fi, pIdx);
-        return `
-          <div class="space-y-1.5 pb-3 border-b border-slate-100 dark:border-slate-800/70 last:border-none">
-            <div class="flex items-center justify-between">
-              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Phần ${pIdx + 1}</span>
-              <button type="button" onclick="goToReviewStoryPart('${story.id}', ${pIdx})" class="text-[11px] text-blue-500 font-medium hover:underline">
-                Ôn phần ${pIdx + 1} →
-              </button>
-            </div>
-            <div class="leading-relaxed">${tokensHtml}</div>
-            <p class="text-xs text-slate-400 dark:text-slate-500">${p.vi || ''}</p>
-          </div>
-        `;
+    function tokenizeParagraph(text, pIdx) {
+      // split với 1 nhóm bắt: phần tử lẻ là từ, phần tử chẵn là dấu câu / khoảng trắng
+      return text.split(WORD_SPLIT_RE).map((part, i) => {
+        if (i % 2 === 0) return esc(part);
+        const clean = part.toLowerCase();
+        const saved = wordStatusMap[clean];
+        const status = saved ? saved.status : 'new';
+        return `<span class="word-token word-${esc(status)}" data-word="${esc(part)}" data-clean="${esc(clean)}" data-pidx="${pIdx}">${esc(part)}</span>`;
       }).join('');
     }
 
+    function selectStory(storyId) {
+      const story = stories.find(s => s.id === storyId) || stories[0];
+      if (!story) return;
+      currentStoryId = story.id;
+      prefs.lastStory = story.id;
+      savePrefs();
+
+      $('delete-confirm-box').classList.add('hidden');
+      $('story-title').textContent = story.title;
+      $('story-level').textContent = story.level || 'A1';
+
+      $('reader-content').innerHTML = story.paragraphs.map((p, pIdx) => `
+        <div class="space-y-1.5 pb-3 border-b border-slate-100 dark:border-slate-800/70 last:border-none">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Phần ${pIdx + 1}</span>
+            <button type="button" data-review-part="${pIdx}" class="text-[11px] text-blue-500 font-medium hover:underline">
+              Ôn phần ${pIdx + 1} →
+            </button>
+          </div>
+          <div class="leading-relaxed">${tokenizeParagraph(p.fi, pIdx)}</div>
+          <p class="text-xs text-slate-400 dark:text-slate-500">${esc(p.vi)}</p>
+        </div>
+      `).join('');
+    }
+
     function requestDeleteCurrentStory() {
-      document.getElementById('delete-confirm-box').classList.toggle('hidden');
+      $('delete-confirm-box').classList.toggle('hidden');
     }
 
     function cancelDeleteStory() {
-      document.getElementById('delete-confirm-box').classList.add('hidden');
+      $('delete-confirm-box').classList.add('hidden');
     }
 
     function confirmDeleteStory() {
-      document.getElementById('delete-confirm-box').classList.add('hidden');
+      $('delete-confirm-box').classList.add('hidden');
       stories = stories.filter(s => s.id !== currentStoryId);
       if (stories.length === 0) {
-        stories = JSON.parse(JSON.stringify(DEFAULT_STORIES));
+        stories = cloneDefaults();
         showToast('Đã xoá bài cuối và khôi phục lại bài mẫu.');
       } else {
         showToast('Đã xoá bài đọc!');
       }
       currentStoryId = stories[0].id;
-      safeSetStorage('suomi_stories_v2', stories);
+      saveStories();
       renderStorySelector();
       selectStory(currentStoryId);
     }
 
     function restoreDefaultStories() {
       const existingIds = new Set(stories.map(s => s.id));
-      DEFAULT_STORIES.forEach(def => {
-        if (!existingIds.has(def.id)) {
-          stories.push(JSON.parse(JSON.stringify(def)));
-        }
+      cloneDefaults().forEach(def => {
+        if (!existingIds.has(def.id)) stories.push(def);
       });
-      safeSetStorage('suomi_stories_v2', stories);
+      saveStories();
       renderStorySelector();
       selectStory(stories[0].id);
       switchTab('reader');
       showToast('Đã khôi phục các bài đọc mẫu!');
     }
 
-    function tokenizeParagraph(text, pIdx) {
-      const parts = text.split(/([A-Za-zÄÖÅäöå]+)/g);
-      return parts.map(part => {
-        if (/^[A-Za-zÄÖÅäöå]+$/.test(part)) {
-          const clean = part.toLowerCase();
-          const saved = wordStatusMap[clean];
-          const status = saved ? saved.status : 'new';
-          return `<span class="word-token word-${status}" data-word="${part}" data-clean="${clean}" data-pidx="${pIdx}">${part}</span>`;
-        }
-        return part;
-      }).join('');
+    // --- Trạng thái từ vựng ---
+    function currentCtx() {
+      return {
+        sentenceFi: selectedSentenceFi,
+        sentenceVi: selectedSentenceVi,
+        storyId: currentStoryId,
+        paraIdx: selectedParaIndex
+      };
     }
 
-    function initReaderDelegation() {
-      const container = document.getElementById('reader-content');
-      container.addEventListener('click', (e) => {
-        const token = e.target.closest('.word-token');
-        if (!token) return;
-        handleWordTap(token);
+    // Ghi trạng thái vào dữ liệu (chưa vẽ lại giao diện, chưa lưu)
+    function applyStatus(clean, status, ctx) {
+      const prev = wordStatusMap[clean] || {};
+      const dict = BUILTIN_DICT[clean] || {};
+      wordStatusMap[clean] = {
+        ...prev,
+        status,
+        meaning: prev.meaning || dict.meaning || '',
+        lemma: prev.lemma || dict.lemma || clean,
+        grammar: prev.grammar || dict.grammar || '',
+        sentenceFi: prev.sentenceFi || ctx.sentenceFi || '',
+        sentenceVi: prev.sentenceVi || ctx.sentenceVi || '',
+        storyId: prev.storyId || ctx.storyId || '',
+        paraIdx: typeof prev.paraIdx === 'number' ? prev.paraIdx : ctx.paraIdx
+      };
+    }
+
+    function setTokenClass(el, status) {
+      el.classList.remove('word-new', 'word-learning', 'word-known');
+      el.classList.add(`word-${status}`);
+    }
+
+    function updateWordStatus(clean, status, ctx = currentCtx()) {
+      applyStatus(clean, status, ctx);
+      document.querySelectorAll(`.word-token[data-clean="${clean}"]`).forEach(el => setTokenClass(el, status));
+      saveWordsSoon();
+      highlightStatusButtons(status);
+      updateStatsBadge();
+    }
+
+    function setWordStatus(newStatus) {
+      if (selectedWordKey) updateWordStatus(selectedWordKey, newStatus);
+    }
+
+    function saveWordDetails(clean, info, ctx) {
+      const prev = wordStatusMap[clean] || { status: 'learning' };
+      wordStatusMap[clean] = {
+        ...prev,
+        meaning: info.meaning || prev.meaning || '',
+        lemma: info.lemma || prev.lemma || clean,
+        grammar: info.grammar || prev.grammar || '',
+        sentenceFi: ctx.sentenceFi || prev.sentenceFi || '',
+        sentenceVi: ctx.sentenceVi || prev.sentenceVi || '',
+        storyId: ctx.storyId || prev.storyId || '',
+        paraIdx: typeof ctx.paraIdx === 'number' ? ctx.paraIdx : (prev.paraIdx || 0)
+      };
+      saveWordsSoon();
+    }
+
+    function highlightStatusButtons(status) {
+      const active = { new: 'bg-blue-600 text-white', learning: 'bg-amber-500 text-white', known: 'bg-emerald-600 text-white' };
+      Object.keys(active).forEach(k => {
+        $(`status-btn-${k}`).className = CLS.statusBtn + (k === status ? active[k] : 'text-slate-500');
       });
     }
 
+    // Đánh dấu thuộc cả bài: mỗi từ lấy đúng câu ngữ cảnh của đoạn chứa nó, chỉ duyệt DOM một lần
+    function markAllKnownInStory() {
+      const story = currentStory();
+      if (!story) return;
+      const tokens = document.querySelectorAll('#reader-content .word-token');
+      const done = new Set();
+
+      tokens.forEach(el => {
+        const clean = el.dataset.clean;
+        if (!clean) return;
+        if (!done.has(clean)) {
+          done.add(clean);
+          const pIdx = parseInt(el.dataset.pidx, 10) || 0;
+          const p = story.paragraphs[pIdx] || { fi: '', vi: '' };
+          applyStatus(clean, 'known', { sentenceFi: p.fi, sentenceVi: p.vi, storyId: story.id, paraIdx: pIdx });
+          wordStatusMap[clean].status = 'known';
+        }
+        setTokenClass(el, 'known');
+      });
+
+      saveWordsSoon();
+      updateStatsBadge();
+      showToast('Đã đánh dấu thuộc toàn bộ từ trong bài!');
+    }
+
+    function updateStatsBadge() {
+      let learning = 0;
+      let known = 0;
+      for (const v of Object.values(wordStatusMap)) {
+        if (v.status === 'learning') learning++;
+        else if (v.status === 'known') known++;
+      }
+      $('stats-badge').textContent = `${learning} đang học • ${known} đã thuộc`;
+    }
+
+    // --- Chạm vào một từ: hiện bảng nghĩa ---
+    function setSheetInfo({ source, lemma, meaning, grammar }) {
+      if (source !== undefined) $('sheet-source-tag').textContent = source;
+      if (lemma !== undefined) $('sheet-lemma').textContent = lemma;
+      if (meaning !== undefined) $('sheet-meaning').textContent = meaning;
+      if (grammar !== undefined) $('sheet-grammar').textContent = grammar;
+    }
+
     async function handleWordTap(tokenEl) {
+      // Tăng ngay từ đầu để mọi yêu cầu tra từ cũ đang chạy dở bị bỏ qua (kể cả khi từ mới nằm trong từ điển)
+      const reqId = ++activeLookupId;
+
       if (selectedTokenEl) selectedTokenEl.classList.remove('word-selected');
       selectedTokenEl = tokenEl;
       tokenEl.classList.add('word-selected');
 
-      const surfaceWord = tokenEl.dataset.word;
-      const cleanWord = tokenEl.dataset.clean;
-      const pIdx = parseInt(tokenEl.dataset.pidx, 10);
-      const story = stories.find(s => s.id === currentStoryId) || stories[0];
-      const para = story.paragraphs[pIdx] || { fi: '', vi: '' };
+      const surface = tokenEl.dataset.word;
+      const clean = tokenEl.dataset.clean;
+      const pIdx = parseInt(tokenEl.dataset.pidx, 10) || 0;
+      const story = currentStory();
+      const para = (story && story.paragraphs[pIdx]) || { fi: '', vi: '' };
+      const ctx = { sentenceFi: para.fi, sentenceVi: para.vi || '', storyId: story ? story.id : currentStoryId, paraIdx: pIdx };
 
-      selectedWordKey = cleanWord;
-      selectedSentenceFi = para.fi;
-      selectedSentenceVi = para.vi || '';
+      selectedWordKey = clean;
+      selectedSentenceFi = ctx.sentenceFi;
+      selectedSentenceVi = ctx.sentenceVi;
       selectedParaIndex = pIdx;
 
-      speakFinnish(surfaceWord);
+      speakFinnish(surface);
 
-      if (!wordStatusMap[cleanWord] || wordStatusMap[cleanWord].status === 'new') {
-        updateSingleWordStatus(cleanWord, 'learning');
+      const saved = wordStatusMap[clean];
+      if (!saved || saved.status === 'new') {
+        updateWordStatus(clean, 'learning', ctx);
       } else {
-        highlightStatusButtons(wordStatusMap[cleanWord].status);
+        highlightStatusButtons(saved.status);
       }
 
-      document.getElementById('sheet-word').textContent = surfaceWord;
-      document.getElementById('sheet-sentence-fi').textContent = selectedSentenceFi;
-      document.getElementById('sheet-sentence-vi').textContent = selectedSentenceVi;
-
+      $('sheet-word').textContent = surface;
+      $('sheet-sentence-fi').textContent = ctx.sentenceFi;
+      $('sheet-sentence-vi').textContent = ctx.sentenceVi;
       openBottomSheet();
 
-      const dictHit = BUILTIN_DICT[cleanWord] || (wordStatusMap[cleanWord] && wordStatusMap[cleanWord].meaning ? wordStatusMap[cleanWord] : null);
-      if (dictHit) {
-        document.getElementById('sheet-source-tag').textContent = 'Từ điển tốc độ cao';
-        document.getElementById('sheet-lemma').textContent = `Từ gốc (Perusmuoto): ${dictHit.lemma}`;
-        document.getElementById('sheet-meaning').textContent = dictHit.meaning;
-        document.getElementById('sheet-grammar').textContent = dictHit.grammar;
-        saveWordDetails(cleanWord, dictHit.meaning, dictHit.lemma, dictHit.grammar);
+      // 1) Từ điển nội bộ hoặc nghĩa đã lưu trước đó
+      const hit = BUILTIN_DICT[clean] || (wordStatusMap[clean] && wordStatusMap[clean].meaning ? wordStatusMap[clean] : null);
+      if (hit) {
+        setSheetInfo({
+          source: 'Từ điển tốc độ cao',
+          lemma: `Từ gốc (Perusmuoto): ${hit.lemma || clean}`,
+          meaning: hit.meaning,
+          grammar: hit.grammar || ''
+        });
+        saveWordDetails(clean, hit, ctx);
         return;
       }
 
-      const morph = analyzeFinnishMorphology(cleanWord);
-      document.getElementById('sheet-lemma').textContent = `Gốc dự đoán: ${morph.lemma}`;
-      document.getElementById('sheet-grammar').textContent = morph.grammar;
+      const morph = analyzeFinnishMorphology(clean);
+      setSheetInfo({ lemma: `Gốc dự đoán: ${morph.lemma}`, grammar: morph.grammar });
 
-      const reqId = ++activeLookupId;
-      const apiKey = getApiKey();
-
-      if (apiKey) {
-        document.getElementById('sheet-source-tag').textContent = 'Gemini AI đang dịch...';
-        document.getElementById('sheet-meaning').textContent = 'Đang phân tích ngữ cảnh câu...';
-
+      // 2) Gemini AI (dịch sát ngữ cảnh câu)
+      if (getApiKey()) {
+        setSheetInfo({ source: 'Gemini AI đang dịch...', meaning: 'Đang phân tích ngữ cảnh câu...' });
         try {
-          const prompt = `Phân tích từ tiếng Phần "${surfaceWord}" trong câu "${selectedSentenceFi.replace(/"/g, "'")}".
+          const prompt = `Phân tích từ tiếng Phần "${surface}" trong câu "${ctx.sentenceFi.replace(/"/g, "'")}".
 Trả về đúng 1 đối tượng JSON theo cấu trúc:
 {"meaning": "nghĩa tiếng Việt sát ngữ cảnh", "lemma": "từ gốc perusmuoto", "grammar": "giải thích biến cách hoặc chia động từ ngắn gọn", "sentenceVi": "dịch cả câu sang tiếng Việt"}`;
 
           const parsed = await callGeminiJSON(prompt, 0.25);
           if (reqId !== activeLookupId) return;
 
-          document.getElementById('sheet-source-tag').textContent = `Gemini AI (${cachedWorkingModel || 'Flash'})`;
-          document.getElementById('sheet-lemma').textContent = `Từ gốc (Perusmuoto): ${parsed.lemma || morph.lemma}`;
-          document.getElementById('sheet-meaning').textContent = parsed.meaning || 'Đã phân tích';
-          document.getElementById('sheet-grammar').textContent = parsed.grammar || morph.grammar;
-          if (parsed.sentenceVi && !selectedSentenceVi) {
-            document.getElementById('sheet-sentence-vi').textContent = parsed.sentenceVi;
-            selectedSentenceVi = parsed.sentenceVi;
+          const info = {
+            meaning: String((parsed && parsed.meaning) || '').trim(),
+            lemma: String((parsed && parsed.lemma) || '').trim() || morph.lemma,
+            grammar: String((parsed && parsed.grammar) || '').trim() || morph.grammar
+          };
+          setSheetInfo({
+            source: `Gemini AI (${cachedWorkingModel || 'Flash'})`,
+            lemma: `Từ gốc (Perusmuoto): ${info.lemma}`,
+            meaning: info.meaning || 'Đã phân tích',
+            grammar: info.grammar
+          });
+          const sentenceVi = String((parsed && parsed.sentenceVi) || '').trim();
+          if (sentenceVi && !ctx.sentenceVi) {
+            ctx.sentenceVi = sentenceVi;
+            selectedSentenceVi = sentenceVi;
+            $('sheet-sentence-vi').textContent = sentenceVi;
           }
-          saveWordDetails(cleanWord, parsed.meaning, parsed.lemma || morph.lemma, parsed.grammar || morph.grammar);
+          saveWordDetails(clean, info, ctx);
           return;
         } catch (err) {
           if (reqId !== activeLookupId) return;
@@ -1198,109 +1530,31 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
         }
       }
 
-      document.getElementById('sheet-source-tag').textContent = 'Đang dịch tự động...';
-      document.getElementById('sheet-meaning').textContent = 'Đang tra nghĩa tiếng Việt...';
-
+      // 3) Dịch nhanh dự phòng
+      setSheetInfo({ source: 'Đang dịch tự động...', meaning: 'Đang tra nghĩa tiếng Việt...' });
       const [wordVi, sentVi] = await Promise.all([
-        translateTextOnline(surfaceWord, 'fi', 'vi'),
-        selectedSentenceVi ? Promise.resolve(selectedSentenceVi) : translateTextOnline(selectedSentenceFi, 'fi', 'vi')
+        translateTextOnline(surface, 'fi', 'vi'),
+        ctx.sentenceVi ? Promise.resolve(ctx.sentenceVi) : translateTextOnline(ctx.sentenceFi, 'fi', 'vi')
       ]);
-
       if (reqId !== activeLookupId) return;
 
       const finalMeaning = wordVi || 'Bấm nút 🔑 Key để kiểm tra kết nối Gemini';
-      document.getElementById('sheet-source-tag').textContent = 'Dịch nhanh + Hình thái học';
-      document.getElementById('sheet-meaning').textContent = finalMeaning;
-      if (sentVi && !selectedSentenceVi) {
-        document.getElementById('sheet-sentence-vi').textContent = sentVi;
+      setSheetInfo({ source: 'Dịch nhanh + Hình thái học', meaning: finalMeaning });
+      if (sentVi && !ctx.sentenceVi) {
+        ctx.sentenceVi = sentVi;
         selectedSentenceVi = sentVi;
+        $('sheet-sentence-vi').textContent = sentVi;
       }
       if (wordVi) {
-        saveWordDetails(cleanWord, finalMeaning, morph.lemma, morph.grammar);
+        saveWordDetails(clean, { meaning: finalMeaning, lemma: morph.lemma, grammar: morph.grammar }, ctx);
       }
-    }
-
-    function saveWordDetails(cleanWord, meaning, lemma, grammar) {
-      const existing = wordStatusMap[cleanWord] || { status: 'learning' };
-      wordStatusMap[cleanWord] = {
-        ...existing,
-        meaning: meaning || existing.meaning || '',
-        lemma: lemma || existing.lemma || cleanWord,
-        grammar: grammar || existing.grammar || '',
-        sentenceFi: selectedSentenceFi || existing.sentenceFi || '',
-        sentenceVi: selectedSentenceVi || existing.sentenceVi || '',
-        storyId: currentStoryId || existing.storyId || '',
-        paraIdx: typeof selectedParaIndex === 'number' ? selectedParaIndex : (existing.paraIdx || 0)
-      };
-      safeSetStorage('suomi_words_v2', wordStatusMap);
-    }
-
-    function setWordStatus(newStatus) {
-      if (!selectedWordKey) return;
-      updateSingleWordStatus(selectedWordKey, newStatus);
-    }
-
-    function updateSingleWordStatus(cleanWord, newStatus, skipSave = false) {
-      const prev = wordStatusMap[cleanWord] || {};
-      const dictHit = BUILTIN_DICT[cleanWord] || {};
-      wordStatusMap[cleanWord] = {
-        ...prev,
-        status: newStatus,
-        meaning: prev.meaning || dictHit.meaning || '',
-        lemma: prev.lemma || dictHit.lemma || cleanWord,
-        grammar: prev.grammar || dictHit.grammar || '',
-        sentenceFi: prev.sentenceFi || selectedSentenceFi || '',
-        sentenceVi: prev.sentenceVi || selectedSentenceVi || '',
-        storyId: prev.storyId || currentStoryId || '',
-        paraIdx: typeof prev.paraIdx === 'number' ? prev.paraIdx : selectedParaIndex
-      };
-
-      document.querySelectorAll(`.word-token[data-clean="${cleanWord}"]`).forEach(el => {
-        el.classList.remove('word-new', 'word-learning', 'word-known');
-        el.classList.add(`word-${newStatus}`);
-      });
-
-      if (!skipSave) {
-        safeSetStorage('suomi_words_v2', wordStatusMap);
-        highlightStatusButtons(newStatus);
-        updateStatsBadge();
-      }
-    }
-
-    function highlightStatusButtons(status) {
-      const configs = {
-        new: { id: 'status-btn-new', activeClass: 'bg-blue-600 text-white' },
-        learning: { id: 'status-btn-learning', activeClass: 'bg-amber-500 text-white' },
-        known: { id: 'status-btn-known', activeClass: 'bg-emerald-600 text-white' }
-      };
-      Object.keys(configs).forEach(k => {
-        const btn = document.getElementById(configs[k].id);
-        btn.className = 'px-2.5 py-1 rounded-lg transition-colors ' + (k === status ? configs[k].activeClass : 'text-slate-500');
-      });
-    }
-
-    function markAllKnownInStory() {
-      const uniqueWords = new Set();
-      document.querySelectorAll('#reader-content .word-token').forEach(el => {
-        if (el.dataset.clean) uniqueWords.add(el.dataset.clean);
-      });
-      uniqueWords.forEach(clean => updateSingleWordStatus(clean, 'known', true));
-      safeSetStorage('suomi_words_v2', wordStatusMap);
-      updateStatsBadge();
-      showToast('Đã đánh dấu thuộc toàn bộ từ trong bài!');
-    }
-
-    function updateStatsBadge() {
-      const vals = Object.values(wordStatusMap);
-      const learningCount = vals.filter(v => v.status === 'learning').length;
-      const knownCount = vals.filter(v => v.status === 'known').length;
-      document.getElementById('stats-badge').textContent = `${learningCount} đang học • ${knownCount} đã thuộc`;
     }
 
     // --- BOTTOM SHEET ĐIỀU KHIỂN ---
     function openBottomSheet() {
-      const sheet = document.getElementById('bottom-sheet');
-      const backdrop = document.getElementById('sheet-backdrop');
+      clearTimeout(sheetHideTimer); // tránh timer đóng cũ ẩn mất lớp nền khi mở lại nhanh
+      const sheet = $('bottom-sheet');
+      const backdrop = $('sheet-backdrop');
       backdrop.classList.remove('hidden');
       requestAnimationFrame(() => {
         backdrop.classList.add('opacity-100');
@@ -1310,44 +1564,47 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     }
 
     function closeBottomSheet() {
-      const sheet = document.getElementById('bottom-sheet');
-      const backdrop = document.getElementById('sheet-backdrop');
+      const sheet = $('bottom-sheet');
+      const backdrop = $('sheet-backdrop');
       sheet.classList.remove('sheet-visible');
       sheet.classList.add('sheet-hidden');
       backdrop.classList.remove('opacity-100');
       if (selectedTokenEl) selectedTokenEl.classList.remove('word-selected');
-      setTimeout(() => backdrop.classList.add('hidden'), 200);
+      clearTimeout(sheetHideTimer);
+      sheetHideTimer = setTimeout(() => backdrop.classList.add('hidden'), 200);
     }
 
     function initSwipeToDismiss() {
-      const sheet = document.getElementById('bottom-sheet');
+      const sheet = $('bottom-sheet');
+      let startX = 0;
       let startY = 0;
       sheet.addEventListener('touchstart', e => {
+        startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
       }, { passive: true });
       sheet.addEventListener('touchend', e => {
-        const endY = e.changedTouches[0].clientY;
-        if (endY - startY > 55) closeBottomSheet();
+        const dx = e.changedTouches[0].clientX - startX;
+        const dy = e.changedTouches[0].clientY - startY;
+        if (dy > 55 && Math.abs(dy) > Math.abs(dx)) closeBottomSheet();
       }, { passive: true });
     }
 
     // =========================================================================
     // TAB 2: ÔN TẬP THEO BÀI / TỪNG PHẦN + TẠO CÂU HỎI TỪ BÀI ĐỌC
     // =========================================================================
-    function syncReviewStoryDropdown() {
-      const sel = document.getElementById('review-story-filter');
+    function syncReviewStoryDropdown(selected = currentStoryId) {
+      const sel = $('review-story-filter');
       if (!sel) return;
-      const optionsHtml = [
-        ...stories.map(s => `<option value="${s.id}">📖 Bài: ${s.title}</option>`),
+      sel.innerHTML = [
+        ...stories.map(s => `<option value="${esc(s.id)}">📖 Bài: ${esc(s.title)}</option>`),
         `<option value="all">📚 Tất cả từ Đang học (mọi bài)</option>`
       ].join('');
-      sel.innerHTML = optionsHtml;
-      sel.value = currentStoryId;
-      populateParagraphFilter(currentStoryId);
+      sel.value = selected;
+      populateParagraphFilter(selected);
     }
 
     function populateParagraphFilter(storyId) {
-      const pSel = document.getElementById('review-paragraph-filter');
+      const pSel = $('review-paragraph-filter');
       if (storyId === 'all') {
         pSel.innerHTML = `<option value="all">Tất cả các phần</option>`;
         pSel.disabled = true;
@@ -1355,137 +1612,142 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       }
       pSel.disabled = false;
       const story = stories.find(s => s.id === storyId) || stories[0];
-      const paraOptions = (story?.paragraphs || []).map((p, idx) => {
-        const shortPreview = p.fi.slice(0, 32) + (p.fi.length > 32 ? '...' : '');
-        return `<option value="${idx}">Phần ${idx + 1}: ${shortPreview}</option>`;
-      });
-      pSel.innerHTML = `<option value="all">Toàn bộ các phần (${story?.paragraphs?.length || 0} phần)</option>` + paraOptions.join('');
+      const paras = (story && story.paragraphs) || [];
+      pSel.innerHTML = `<option value="all">Toàn bộ các phần (${paras.length} phần)</option>` +
+        paras.map((p, idx) => {
+          const preview = p.fi.slice(0, 32) + (p.fi.length > 32 ? '...' : '');
+          return `<option value="${idx}">Phần ${idx + 1}: ${esc(preview)}</option>`;
+        }).join('');
     }
 
+    function getReviewScope() {
+      const storyFilter = ($('review-story-filter') && $('review-story-filter').value) || currentStoryId;
+      const paraFilter = ($('review-paragraph-filter') && $('review-paragraph-filter').value) || 'all';
+      const story = stories.find(s => s.id === (storyFilter === 'all' ? currentStoryId : storyFilter)) || stories[0];
+      return { storyFilter, paraFilter, story };
+    }
+
+    const inScope = (idx, paraFilter) => paraFilter === 'all' || String(idx) === String(paraFilter);
+
     function onReviewFilterChange() {
-      const storyId = document.getElementById('review-story-filter').value;
+      const storyId = $('review-story-filter').value;
       if (storyId !== 'all') {
         currentStoryId = storyId;
-        document.getElementById('story-selector').value = storyId;
+        $('story-selector').value = storyId;
         selectStory(storyId);
       }
       populateParagraphFilter(storyId);
       buildReviewQueue();
     }
 
-    function goToReviewCurrentStory() {
-      switchTab('review');
-      document.getElementById('review-story-filter').value = currentStoryId;
-      populateParagraphFilter(currentStoryId);
+    function openReview(storyId, paraIdx = 'all') {
+      switchTab('review', { skipBuild: true });
+      syncReviewStoryDropdown(storyId);
+      $('review-paragraph-filter').value = String(paraIdx);
       buildReviewQueue();
     }
 
-    function goToReviewStoryPart(storyId, paraIdx) {
-      switchTab('review');
-      document.getElementById('review-story-filter').value = storyId;
-      populateParagraphFilter(storyId);
-      document.getElementById('review-paragraph-filter').value = String(paraIdx);
-      buildReviewQueue();
+    function goToReviewCurrentStory() {
+      openReview(currentStoryId);
     }
 
     function switchReviewMode(mode) {
-      const clozeBox = document.getElementById('review-mode-cloze');
-      const quizBox = document.getElementById('review-mode-quiz');
-      const clozeBtn = document.getElementById('subtab-cloze-btn');
-      const quizBtn = document.getElementById('subtab-quiz-btn');
-
-      if (mode === 'cloze') {
-        clozeBox.classList.remove('hidden');
-        quizBox.classList.add('hidden');
-        clozeBtn.className = 'py-2 rounded-lg bg-blue-600 text-white shadow-sm transition-all';
-        quizBtn.className = 'py-2 rounded-lg text-slate-500 dark:text-slate-400 transition-all';
-      } else {
-        clozeBox.classList.add('hidden');
-        quizBox.classList.remove('hidden');
-        quizBtn.className = 'py-2 rounded-lg bg-indigo-600 text-white shadow-sm transition-all';
-        clozeBtn.className = 'py-2 rounded-lg text-slate-500 dark:text-slate-400 transition-all';
-      }
+      const isCloze = mode === 'cloze';
+      $('review-mode-cloze').classList.toggle('hidden', !isCloze);
+      $('review-mode-quiz').classList.toggle('hidden', isCloze);
+      $('subtab-cloze-btn').className = isCloze ? CLS.subtabClozeOn : CLS.subtabOff;
+      $('subtab-quiz-btn').className = isCloze ? CLS.subtabOff : CLS.subtabQuizOn;
     }
 
+    // Che MỌI vị trí xuất hiện của từ trong câu (tránh để lộ đáp án ở lần xuất hiện thứ hai)
     function maskFinnishWordInSentence(sentence, targetWord) {
-      const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const boundaryRegex = new RegExp(`(^|[^A-Za-zÄÖÅäöå])(${escaped})(?=[^A-Za-zÄÖÅäöå]|$)`, 'i');
-      if (boundaryRegex.test(sentence)) {
-        return sentence.replace(boundaryRegex, '$1______');
+      const escaped = escapeRegExp(targetWord);
+      const re = new RegExp(`(^|[^\\p{L}])(${escaped})(?![\\p{L}])`, 'giu');
+      const masked = sentence.replace(re, '$1______');
+      if (masked !== sentence) return masked;
+      return sentence.replace(new RegExp(escaped, 'iu'), '______');
+    }
+
+    function updateScopeBadge(storyFilter, paraFilter) {
+      let label = 'Toàn bộ bài đang chọn';
+      if (storyFilter === 'all') label = 'Mọi bài • từ đang học';
+      else if (paraFilter !== 'all') label = `Phần ${Number(paraFilter) + 1}`;
+      $('review-scope-badge').textContent = label;
+    }
+
+    function showReviewQueue() {
+      $('review-counter').textContent = `${reviewQueue.length} thẻ`;
+      const hasCards = reviewQueue.length > 0;
+      $('review-empty').classList.toggle('hidden', hasCards);
+      $('review-card').classList.toggle('hidden', !hasCards);
+      if (hasCards) {
+        currentReviewIndex = 0;
+        renderReviewCard();
       }
-      return sentence.replace(new RegExp(escaped, 'i'), '______');
     }
 
     function buildReviewQueue() {
-      const storyFilter = document.getElementById('review-story-filter')?.value || currentStoryId;
-      const paraFilter = document.getElementById('review-paragraph-filter')?.value || 'all';
-
+      const { storyFilter, paraFilter, story } = getReviewScope();
       reviewQueue = [];
 
       if (storyFilter === 'all') {
-        reviewQueue = Object.entries(wordStatusMap)
-          .filter(([, data]) => data.status === 'learning')
-          .map(([word, data]) => ({
-            word,
-            ...data,
-            partLabel: 'Từ đang học'
-          }));
-      } else {
-        const story = stories.find(s => s.id === storyFilter) || stories[0];
-        if (story) {
-          story.paragraphs.forEach((p, idx) => {
-            if (paraFilter !== 'all' && String(idx) !== String(paraFilter)) return;
-            const wordsInPara = (p.fi.match(/[A-Za-zÄÖÅäöå]+/g) || []);
-            const seenInPara = new Set();
-
-            wordsInPara.forEach(surface => {
-              const clean = surface.toLowerCase();
-              if (seenInPara.has(clean)) return;
-              const saved = wordStatusMap[clean];
-              if (saved && saved.status === 'learning') {
-                seenInPara.add(clean);
-                const dict = BUILTIN_DICT[clean] || {};
-                reviewQueue.push({
-                  word: surface,
-                  cleanWord: clean,
-                  meaning: saved.meaning || dict.meaning || '',
-                  lemma: saved.lemma || dict.lemma || clean,
-                  grammar: saved.grammar || dict.grammar || '',
-                  sentenceFi: p.fi,
-                  sentenceVi: p.vi || saved.sentenceVi || '',
-                  partLabel: `Phần ${idx + 1} – ${story.title}`
-                });
-              }
-            });
-          });
+        for (const [word, data] of Object.entries(wordStatusMap)) {
+          if (data.status === 'learning') {
+            reviewQueue.push({ ...data, word, cleanWord: word, partLabel: 'Từ đang học' });
+          }
         }
+      } else if (story) {
+        story.paragraphs.forEach((p, idx) => {
+          if (!inScope(idx, paraFilter)) return;
+          const seen = new Set();
+          for (const surface of (p.fi.match(WORD_MATCH_RE) || [])) {
+            const clean = surface.toLowerCase();
+            if (seen.has(clean)) continue;
+            const saved = wordStatusMap[clean];
+            if (!saved || saved.status !== 'learning') continue;
+            seen.add(clean);
+            const dict = BUILTIN_DICT[clean] || {};
+            reviewQueue.push({
+              word: surface,
+              cleanWord: clean,
+              meaning: saved.meaning || dict.meaning || '',
+              lemma: saved.lemma || dict.lemma || clean,
+              grammar: saved.grammar || dict.grammar || '',
+              sentenceFi: p.fi,
+              sentenceVi: p.vi || saved.sentenceVi || '',
+              partLabel: `Phần ${idx + 1} – ${story.title}`
+            });
+          }
+        });
       }
 
-      document.getElementById('review-counter').textContent = `${reviewQueue.length} thẻ`;
-
-      if (reviewQueue.length === 0) {
-        document.getElementById('review-empty').classList.remove('hidden');
-        document.getElementById('review-card').classList.add('hidden');
-        return;
+      updateScopeBadge(storyFilter, paraFilter);
+      // Đổi phạm vi thì xoá bộ câu hỏi AI cũ để khỏi nhầm sang bài khác
+      if (currentQuizData.length && quizScopeKey !== scopeKey()) {
+        currentQuizData = [];
+        $('quiz-container').innerHTML = '';
       }
-
-      document.getElementById('review-empty').classList.add('hidden');
-      document.getElementById('review-card').classList.remove('hidden');
-      currentReviewIndex = 0;
-      renderReviewCard();
+      showReviewQueue();
     }
 
-    async function extractWordsFromSelectedScope() {
-      const storyFilter = document.getElementById('review-story-filter')?.value || currentStoryId;
-      const paraFilter = document.getElementById('review-paragraph-filter')?.value || 'all';
-      const story = stories.find(s => s.id === (storyFilter === 'all' ? currentStoryId : storyFilter)) || stories[0];
+    // Không có từ đánh dấu vàng: tự lấy tối đa 5 từ dài (>= 4 chữ cái, không trùng) mỗi đoạn để ôn ngay
+    function extractWordsFromSelectedScope() {
+      const { paraFilter, story } = getReviewScope();
       if (!story) return;
 
       reviewQueue = [];
       story.paragraphs.forEach((p, idx) => {
-        if (paraFilter !== 'all' && String(idx) !== String(paraFilter)) return;
-        const tokens = (p.fi.match(/[A-Za-zÄÖÅäöå]{4,}/g) || []);
-        tokens.slice(0, 5).forEach(surface => {
+        if (!inScope(idx, paraFilter)) return;
+        const picked = [];
+        const seen = new Set();
+        for (const surface of (p.fi.match(LONG_WORD_RE) || [])) {
+          const clean = surface.toLowerCase();
+          if (seen.has(clean)) continue;
+          seen.add(clean);
+          picked.push(surface);
+          if (picked.length >= 5) break;
+        }
+        for (const surface of picked) {
           const clean = surface.toLowerCase();
           const dict = BUILTIN_DICT[clean] || wordStatusMap[clean] || analyzeFinnishMorphology(clean);
           reviewQueue.push({
@@ -1498,49 +1760,45 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
             sentenceVi: p.vi || '',
             partLabel: `Phần ${idx + 1} – ${story.title}`
           });
-        });
+        }
       });
 
-      document.getElementById('review-counter').textContent = `${reviewQueue.length} thẻ`;
-      if (reviewQueue.length > 0) {
-        document.getElementById('review-empty').classList.add('hidden');
-        document.getElementById('review-card').classList.remove('hidden');
-        currentReviewIndex = 0;
-        renderReviewCard();
+      if (reviewQueue.length === 0) {
+        showToast('Phần này không có từ nào đủ dài để ôn.', true);
+        return;
       }
+      showReviewQueue();
     }
 
     async function renderReviewCard() {
       if (reviewQueue.length === 0) return;
-      const item = reviewQueue[currentReviewIndex % reviewQueue.length];
+      const token = ++renderToken;
+      const pos = currentReviewIndex % reviewQueue.length;
+      const item = reviewQueue[pos];
       const sentence = item.sentenceFi || `Opiskelen sanaa ${item.word} tänään.`;
-      const clozeText = maskFinnishWordInSentence(sentence, item.word);
+      const hintText = () => `Gợi ý nghĩa: ${item.meaning || 'Đang tra nghĩa...'} (Gốc: ${item.lemma || item.word.toLowerCase()})`;
 
-      document.getElementById('cloze-part-label').textContent = `${item.partLabel || 'Ngữ cảnh'} (Câu ${(currentReviewIndex % reviewQueue.length) + 1}/${reviewQueue.length})`;
-      document.getElementById('cloze-sentence').textContent = clozeText;
-      document.getElementById('cloze-vi-sentence').textContent = item.sentenceVi ? `Dịch câu: "${item.sentenceVi}"` : '';
-      document.getElementById('cloze-vi-hint').textContent = `Gợi ý nghĩa: ${item.meaning || 'Đang tra nghĩa...'} (Gốc: ${item.lemma || item.word.toLowerCase()})`;
-      document.getElementById('cloze-input').value = '';
-      document.getElementById('cloze-feedback').classList.add('hidden');
+      $('cloze-part-label').textContent = `${item.partLabel || 'Ngữ cảnh'} (Câu ${pos + 1}/${reviewQueue.length})`;
+      $('cloze-sentence').textContent = maskFinnishWordInSentence(sentence, item.word);
+      $('cloze-vi-sentence').textContent = item.sentenceVi ? `Dịch câu: "${item.sentenceVi}"` : '';
+      $('cloze-vi-hint').textContent = hintText();
+      $('cloze-input').value = '';
+      $('cloze-feedback').classList.add('hidden');
 
-      const targetLower = item.word.toLowerCase();
-      const storyWords = reviewQueue.map(r => r.word.toLowerCase()).filter(w => w !== targetLower);
-      const dictWords = Object.keys(BUILTIN_DICT).filter(w => w !== targetLower);
-      const pool = Array.from(new Set([...storyWords, ...dictWords]));
-      const distractors = pool.sort(() => 0.5 - Math.random()).slice(0, 3);
-      currentChoicesList = [...distractors, targetLower].sort(() => 0.5 - Math.random());
-
-      document.getElementById('cloze-choices').innerHTML = currentChoicesList.map((c, cIdx) => `
-        <button type="button" onclick="selectChoiceByIndex(${cIdx})" class="py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/20 text-sm font-medium border border-slate-200 dark:border-slate-700 active:scale-95">
-          ${c}
-        </button>
-      `).join('');
+      // 3 đáp án nhiễu + đáp án đúng, xáo trộn đều (Fisher–Yates)
+      const target = item.word.toLowerCase();
+      const pool = [...new Set([...reviewQueue.map(r => r.word.toLowerCase()), ...DICT_WORDS])].filter(w => w !== target);
+      const choices = shuffle([...shuffle(pool).slice(0, 3), target]);
+      $('cloze-choices').innerHTML = choices
+        .map(c => `<button type="button" data-choice="${esc(c)}" class="${CLS.choice}">${esc(c)}</button>`)
+        .join('');
 
       if (!item.meaning) {
         const translated = await translateTextOnline(item.word, 'fi', 'vi');
-        if (translated) {
+        // Bỏ qua nếu người dùng đã chuyển sang thẻ khác trong lúc chờ dịch
+        if (translated && token === renderToken) {
           item.meaning = translated;
-          document.getElementById('cloze-vi-hint').textContent = `Gợi ý nghĩa: ${item.meaning} (Gốc: ${item.lemma || item.word.toLowerCase()})`;
+          $('cloze-vi-hint').textContent = hintText();
         }
       }
     }
@@ -1551,14 +1809,8 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       speakFinnish(item.sentenceFi || item.word);
     }
 
-    function selectChoiceByIndex(cIdx) {
-      const val = currentChoicesList[cIdx] || '';
-      document.getElementById('cloze-input').value = val;
-      checkClozeAnswer();
-    }
-
     function insertSpecialChar(ch) {
-      const input = document.getElementById('cloze-input');
+      const input = $('cloze-input');
       input.value += ch;
       input.focus();
     }
@@ -1566,8 +1818,8 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     function checkClozeAnswer() {
       if (reviewQueue.length === 0) return;
       const item = reviewQueue[currentReviewIndex % reviewQueue.length];
-      const userAns = document.getElementById('cloze-input').value.trim().toLowerCase();
-      const fb = document.getElementById('cloze-feedback');
+      const userAns = $('cloze-input').value.trim().toLowerCase();
+      const fb = $('cloze-feedback');
       fb.classList.remove('hidden');
 
       if (userAns === item.word.toLowerCase()) {
@@ -1587,23 +1839,48 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     }
 
     // --- TẠO CÂU HỎI TỪ BÀI ĐỌC BẰNG GEMINI AI ---
+    const scopeKey = () => {
+      const { paraFilter, story } = getReviewScope();
+      return `${story ? story.id : ''}|${paraFilter}`;
+    };
+
+    // Chuẩn hoá câu hỏi từ AI và xáo trộn đáp án (AI hay đặt đáp án đúng ở vị trí A)
+    function normalizeQuiz(rawList) {
+      if (!Array.isArray(rawList)) return [];
+      return rawList
+        .filter(q => q && typeof q.question === 'string' && Array.isArray(q.options) && q.options.length >= 2)
+        .map(q => {
+          const options = q.options.map(o => String(o));
+          let correct = Number(q.correctIndex);
+          if (!Number.isInteger(correct) || correct < 0 || correct >= options.length) correct = 0;
+          const order = shuffle(options.map((_, i) => i));
+          return {
+            question: q.question,
+            quoteFi: typeof q.quoteFi === 'string' ? q.quoteFi : '',
+            explanation: String((q && q.explanation) ?? ''),
+            options: order.map(i => options[i]),
+            correctIndex: order.indexOf(correct),
+            answered: false
+          };
+        });
+    }
+
     async function generateStoryQuiz() {
-      const storyFilter = document.getElementById('review-story-filter')?.value || currentStoryId;
-      const paraFilter = document.getElementById('review-paragraph-filter')?.value || 'all';
-      const story = stories.find(s => s.id === (storyFilter === 'all' ? currentStoryId : storyFilter)) || stories[0];
+      const { paraFilter, story } = getReviewScope();
       if (!story) return;
 
-      const selectedParas = story.paragraphs.filter((_, idx) => paraFilter === 'all' || String(idx) === String(paraFilter));
-      const contextText = selectedParas.map((p, i) => `Đoạn ${i + 1}: ${p.fi} (${p.vi || ''})`).join('\n');
+      const contextText = story.paragraphs
+        .map((p, i) => ({ p, i }))
+        .filter(({ i }) => inScope(i, paraFilter))
+        .map(({ p }, n) => `Đoạn ${n + 1}: ${p.fi} (${p.vi || ''})`)
+        .join('\n');
 
-      const btn = document.getElementById('gen-quiz-btn');
-      const statusEl = document.getElementById('quiz-status');
-      const container = document.getElementById('quiz-container');
+      const btn = $('gen-quiz-btn');
+      const statusEl = $('quiz-status');
 
       if (!getApiKey()) {
         statusEl.className = 'text-xs p-3 rounded-xl bg-amber-500/15 text-amber-400 font-medium';
         statusEl.textContent = '⚠️ Bạn chưa nhập Gemini API Key. Hãy bấm nút "🔑 Key" ở góc trên để dán mã trước.';
-        statusEl.classList.remove('hidden');
         openApiKeyModal();
         return;
       }
@@ -1612,42 +1889,42 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       btn.textContent = '⏳ Gemini AI đang tạo câu hỏi mới...';
       statusEl.className = 'text-xs p-3 rounded-xl bg-blue-500/10 text-blue-400 font-medium';
       statusEl.textContent = `Đang phân tích bài "${story.title}" để tạo câu hỏi không trùng lặp...`;
-      statusEl.classList.remove('hidden');
-      container.innerHTML = '';
+      $('quiz-container').innerHTML = '';
 
       try {
-        const prevQuestions = currentQuizData.map(q => q.question).join(' | ');
+        const key = scopeKey();
+        const prevQuestions = quizScopeKey === key ? currentQuizData.map(q => q.question).join(' | ') : '';
         const prompt = `Dựa sát vào nội dung bài đọc tiếng Phần dưới đây:
 Tiêu đề: ${story.title}
 Nội dung:
 ${contextText}
 ${prevQuestions ? `\nLưu ý: Tuyệt đối KHÔNG lặp lại các câu hỏi đã hỏi trước đó: ${prevQuestions}` : ''}
 
-Hãy tạo 4 câu hỏi trắc nghiệm mới mẻ (gồm câu hỏi đọc hiểu chi tiết, câu hỏi điền từ/biến cách xuất hiện trong bài, và câu hỏi từ vựng).
+Hãy tạo 4 câu hỏi trắc nghiệm mới mẻ (gồm câu hỏi đọc hiểu chi tiết, câu hỏi điền từ/biến cách xuất hiện trong bài, và câu hỏi từ vựng). Mỗi câu có đúng 4 đáp án, vị trí đáp án đúng phải ngẫu nhiên.
 Trả về đúng 1 đối tượng JSON theo cấu trúc:
 {
   "questions": [
     {
       "question": "Nội dung câu hỏi",
       "quoteFi": "Câu tiếng Phần trích từ bài",
-      "options": ["Đáp án A", "Đáp án B", "Đáp án C", "Đáp án D"],
-      "correctIndex": 0,
+      "options": ["Đáp án 1", "Đáp án 2", "Đáp án 3", "Đáp án 4"],
+      "correctIndex": 2,
       "explanation": "Giải thích chi tiết bằng tiếng Việt"
     }
   ]
 }`;
 
         const parsed = await callGeminiJSON(prompt, 0.75);
-        if (Array.isArray(parsed?.questions) && parsed.questions.length > 0) {
-          currentQuizData = parsed.questions;
-          statusEl.classList.add('hidden');
-          renderQuizQuestions();
-        } else {
-          throw new Error('Phản hồi từ Gemini thiếu danh sách câu hỏi.');
-        }
+        const quiz = normalizeQuiz(parsed && parsed.questions);
+        if (quiz.length === 0) throw new Error('Phản hồi từ Gemini thiếu danh sách câu hỏi hợp lệ.');
+
+        currentQuizData = quiz;
+        quizScopeKey = key;
+        statusEl.classList.add('hidden');
+        renderQuizQuestions();
       } catch (err) {
         statusEl.className = 'text-xs p-3 rounded-xl bg-rose-500/15 text-rose-400 font-medium';
-        statusEl.innerHTML = `❌ <b>Không gọi được Gemini:</b> ${err.message}<br/><button type="button" onclick="openApiKeyModal()" class="mt-2 px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">🔑 Kiểm tra / Đổi API Key ngay</button>`;
+        statusEl.innerHTML = `❌ <b>Không gọi được Gemini:</b> ${esc(err.message)}<br/><button type="button" onclick="openApiKeyModal()" class="mt-2 px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">🔑 Kiểm tra / Đổi API Key ngay</button>`;
       } finally {
         btn.disabled = false;
         btn.textContent = '✨ Tạo 4 câu hỏi mới từ phần đang chọn';
@@ -1660,16 +1937,10 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     }
 
     function renderQuizQuestions() {
-      const container = document.getElementById('quiz-container');
-      container.innerHTML = currentQuizData.map((q, qIdx) => {
-        const optionsHtml = (q.options || []).map((opt, oIdx) => `
-          <button
-            type="button"
-            id="quiz-opt-${qIdx}-${oIdx}"
-            onclick="answerQuizQuestion(${qIdx}, ${oIdx})"
-            class="w-full text-left px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-blue-500/15 border border-slate-200 dark:border-slate-700 text-xs font-medium transition-all active:scale-[0.99]"
-          >
-            <span class="font-bold mr-1.5">${String.fromCharCode(65 + oIdx)}.</span> ${opt}
+      $('quiz-container').innerHTML = currentQuizData.map((q, qIdx) => {
+        const optionsHtml = q.options.map((opt, oIdx) => `
+          <button type="button" id="quiz-opt-${qIdx}-${oIdx}" data-q="${qIdx}" data-o="${oIdx}" class="${CLS.quizOpt}">
+            <span class="font-bold mr-1.5">${String.fromCharCode(65 + oIdx)}.</span> ${esc(opt)}
           </button>
         `).join('');
 
@@ -1677,10 +1948,10 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
           <div class="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
             <div class="flex items-start justify-between gap-2">
               <span class="text-xs font-bold text-indigo-500">Câu ${qIdx + 1}/${currentQuizData.length}</span>
-              ${q.quoteFi ? `<button type="button" onclick="speakQuizQuote(${qIdx})" class="text-[11px] text-blue-500 font-medium">🔊 Nghe câu gốc</button>` : ''}
+              ${q.quoteFi ? `<button type="button" data-speak-quote="${qIdx}" class="text-[11px] text-blue-500 font-medium">🔊 Nghe câu gốc</button>` : ''}
             </div>
-            <p class="text-sm font-bold leading-snug">${q.question}</p>
-            ${q.quoteFi ? `<p class="text-xs italic text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-slate-900/60 px-2.5 py-1.5 rounded-lg">"${q.quoteFi}"</p>` : ''}
+            <p class="text-sm font-bold leading-snug">${esc(q.question)}</p>
+            ${q.quoteFi ? `<p class="text-xs italic text-slate-500 dark:text-slate-400 bg-white/60 dark:bg-slate-900/60 px-2.5 py-1.5 rounded-lg">"${esc(q.quoteFi)}"</p>` : ''}
             <div class="space-y-1.5 pt-1">${optionsHtml}</div>
             <div id="quiz-exp-${qIdx}" class="hidden text-xs p-2.5 rounded-xl leading-relaxed"></div>
           </div>
@@ -1690,28 +1961,23 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
 
     function answerQuizQuestion(qIdx, selectedOptIdx) {
       const q = currentQuizData[qIdx];
-      if (!q) return;
-      const correctIdx = Number(q.correctIndex) || 0;
-      const expEl = document.getElementById(`quiz-exp-${qIdx}`);
+      if (!q || q.answered) return; // chỉ cho trả lời một lần
+      q.answered = true;
 
-      (q.options || []).forEach((_, oIdx) => {
-        const btn = document.getElementById(`quiz-opt-${qIdx}-${oIdx}`);
+      q.options.forEach((_, oIdx) => {
+        const btn = $(`quiz-opt-${qIdx}-${oIdx}`);
         if (!btn) return;
-        if (oIdx === correctIdx) {
-          btn.className = 'w-full text-left px-3.5 py-2.5 rounded-xl bg-emerald-500/20 border-2 border-emerald-500 text-emerald-600 dark:text-emerald-300 text-xs font-bold';
-        } else if (oIdx === selectedOptIdx) {
-          btn.className = 'w-full text-left px-3.5 py-2.5 rounded-xl bg-rose-500/20 border-2 border-rose-500 text-rose-600 dark:text-rose-300 text-xs font-semibold';
-        } else {
-          btn.className = 'w-full text-left px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 opacity-60 border border-slate-200 dark:border-slate-700 text-xs';
-        }
+        if (oIdx === q.correctIndex) btn.className = CLS.quizOptCorrect;
+        else if (oIdx === selectedOptIdx) btn.className = CLS.quizOptWrong;
+        else btn.className = CLS.quizOptDim;
       });
 
-      const isCorrect = selectedOptIdx === correctIdx;
+      const isCorrect = selectedOptIdx === q.correctIndex;
+      const expEl = $(`quiz-exp-${qIdx}`);
       expEl.className = `text-xs p-2.5 rounded-xl leading-relaxed ${
         isCorrect ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300' : 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
       }`;
-      expEl.innerHTML = `<b>${isCorrect ? '🎉 Chính xác!' : '💡 Giải thích:'}</b> ${q.explanation || ''}`;
-      expEl.classList.remove('hidden');
+      expEl.innerHTML = `<b>${isCorrect ? '🎉 Chính xác!' : '💡 Giải thích:'}</b> ${esc(q.explanation)}`;
 
       if (q.quoteFi) speakFinnish(q.quoteFi);
     }
@@ -1720,13 +1986,22 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
     // TAB 3: THÊM BÀI ĐỌC & TẠO TRUYỆN BẰNG GEMINI AI (CHỐNG LẶP CÂU)
     // =========================================================================
     function setAiTopic(topicText) {
-      document.getElementById('ai-topic').value = topicText;
+      $('ai-topic').value = topicText;
+    }
+
+    function addStoryAndOpen(story) {
+      stories.unshift(story);
+      saveStories();
+      currentStoryId = story.id;
+      renderStorySelector();
+      selectStory(story.id);
+      switchTab('reader');
     }
 
     async function saveCustomStory() {
-      const title = document.getElementById('custom-title').value.trim() || 'Bài đọc tự thêm';
-      const rawText = document.getElementById('custom-content').value.trim();
-      const btn = document.getElementById('save-custom-btn');
+      const title = $('custom-title').value.trim() || 'Bài đọc tự thêm';
+      const rawText = $('custom-content').value.trim();
+      const btn = $('save-custom-btn');
 
       if (!rawText) {
         showToast('Hãy dán nội dung tiếng Phần vào ô trước!', true);
@@ -1736,44 +2011,31 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       btn.disabled = true;
       btn.textContent = '⏳ Đang dịch từng đoạn sang tiếng Việt...';
 
-      const lines = rawText.split(/\n+/).map(l => l.trim()).filter(Boolean);
-      const paragraphs = [];
+      try {
+        const lines = rawText.split(/\n+/).map(l => l.trim()).filter(Boolean);
+        // Dịch song song tối đa 3 đoạn cùng lúc: nhanh hơn dịch tuần tự mà không dồn dập quá mức
+        const viLines = await mapLimit(lines, 3, line => translateTextOnline(line, 'fi', 'vi'));
+        const paragraphs = lines.map((fi, i) => ({ fi, vi: viLines[i] || '' }));
 
-      for (const fiLine of lines) {
-        const viLine = await translateTextOnline(fiLine, 'fi', 'vi');
-        paragraphs.push({ fi: fiLine, vi: viLine });
+        addStoryAndOpen({ id: 'story-' + Date.now(), title, level: 'Tự chọn', paragraphs });
+        $('custom-title').value = '';
+        $('custom-content').value = '';
+        showToast('Đã lưu và dịch xong bài đọc mới!');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Lưu & Dịch tự động bài đọc';
       }
-
-      const newStory = {
-        id: 'story-' + Date.now(),
-        title,
-        level: 'Tự chọn',
-        paragraphs
-      };
-
-      stories.unshift(newStory);
-      safeSetStorage('suomi_stories_v2', stories);
-      currentStoryId = newStory.id;
-      renderStorySelector();
-      selectStory(newStory.id);
-      switchTab('reader');
-      document.getElementById('custom-title').value = '';
-      document.getElementById('custom-content').value = '';
-      btn.disabled = false;
-      btn.textContent = 'Lưu & Dịch tự động bài đọc';
-      showToast('Đã lưu và dịch xong bài đọc mới!');
     }
 
     async function generateAIStory() {
-      const topic = document.getElementById('ai-topic').value.trim() || 'Cuộc sống hàng ngày ở Phần Lan';
-      const level = document.getElementById('ai-level').value;
-      const btn = document.getElementById('ai-gen-btn');
-      const statusBox = document.getElementById('ai-story-status');
+      const topic = $('ai-topic').value.trim() || 'Cuộc sống hàng ngày ở Phần Lan';
+      const level = $('ai-level').value;
+      const btn = $('ai-gen-btn');
+      const statusBox = $('ai-story-status');
 
       if (!getApiKey()) {
         statusBox.className = 'text-xs p-3 rounded-xl font-medium bg-amber-500/15 text-amber-400';
         statusBox.textContent = '⚠️ Bạn chưa nhập Gemini API Key. Hãy bấm nút "🔑 Key" ở góc trên để dán mã trước khi tạo bài.';
-        statusBox.classList.remove('hidden');
         openApiKeyModal();
         return;
       }
@@ -1782,13 +2044,12 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
       btn.disabled = true;
       statusBox.className = 'text-xs p-3 rounded-xl font-medium bg-indigo-500/15 text-indigo-400';
       statusBox.textContent = `Đang gọi Gemini tạo bài đọc mới trình độ ${level} về chủ đề "${topic}"...`;
-      statusBox.classList.remove('hidden');
 
       try {
-        // Lấy danh sách các câu đầu của những bài đã tạo trước đó để cấm AI lặp lại
+        // Lấy câu đầu của các bài gần đây để cấm AI lặp lại
         const previousSentences = stories
           .slice(0, 6)
-          .map(s => s.paragraphs?.[0]?.fi || '')
+          .map(s => (s.paragraphs[0] && s.paragraphs[0].fi) || '')
           .filter(Boolean)
           .join(' | ');
 
@@ -1811,64 +2072,59 @@ Trả về đúng 1 đối tượng JSON theo cấu trúc:
   ]
 }`;
 
-        // Sử dụng temperature = 0.85 để mỗi lần bấm tạo ra một câu chuyện hoàn toàn khác biệt
+        // temperature cao để mỗi lần bấm ra một câu chuyện khác biệt
         const parsed = await callGeminiJSON(prompt, 0.85);
-        if (!parsed || !Array.isArray(parsed.paragraphs) || parsed.paragraphs.length === 0) {
-          throw new Error('Phản hồi từ AI không đúng cấu trúc đoạn văn.');
-        }
+        const paragraphs = sanitizeParagraphs(parsed && parsed.paragraphs);
+        if (paragraphs.length === 0) throw new Error('Phản hồi từ AI không đúng cấu trúc đoạn văn.');
 
-        const newStory = {
-          id: 'story-' + Date.now(),
-          title: parsed.title || topic,
-          level,
-          paragraphs: parsed.paragraphs
-        };
-
-        stories.unshift(newStory);
-        safeSetStorage('suomi_stories_v2', stories);
-        currentStoryId = newStory.id;
-        renderStorySelector();
-        selectStory(newStory.id);
         statusBox.classList.add('hidden');
-        document.getElementById('ai-topic').value = '';
-        switchTab('reader');
+        $('ai-topic').value = '';
+        addStoryAndOpen({
+          id: 'story-' + Date.now(),
+          title: String((parsed && parsed.title) || '').trim() || topic,
+          level,
+          paragraphs
+        });
         showToast('✨ Đã tạo xong bài đọc mới bằng Gemini AI!');
       } catch (err) {
         statusBox.className = 'text-xs p-3 rounded-xl font-medium bg-rose-500/15 text-rose-400';
-        statusBox.innerHTML = `❌ <b>Không gọi được Gemini AI:</b> ${err.message}<br/><button type="button" onclick="openApiKeyModal()" class="mt-2 px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">🔑 Bấm vào đây để đổi / kiểm tra API Key</button>`;
+        statusBox.innerHTML = `❌ <b>Không gọi được Gemini AI:</b> ${esc(err.message)}<br/><button type="button" onclick="openApiKeyModal()" class="mt-2 px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">🔑 Bấm vào đây để đổi / kiểm tra API Key</button>`;
       } finally {
         btn.textContent = '✨ Tạo bài đọc mới bằng Gemini AI';
         btn.disabled = false;
       }
     }
 
-    // --- ĐIỀU HƯỚNG & GIAO DIỆN ---
-    function switchTab(tab) {
+    // =========================================================================
+    // ĐIỀU HƯỚNG & GIAO DIỆN
+    // =========================================================================
+    const TABS = ['reader', 'review', 'add'];
+
+    function switchTab(tab, { skipBuild = false } = {}) {
       closeBottomSheet();
-      ['reader', 'review', 'add'].forEach(t => {
-        document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== tab);
-        const navBtn = document.getElementById(`nav-${t}`);
-        if (t === tab) {
-          navBtn.className = 'flex flex-col items-center py-1 text-blue-600 dark:text-blue-400 font-semibold text-xs';
-        } else {
-          navBtn.className = 'flex flex-col items-center py-1 text-slate-400 font-medium text-xs';
-        }
-      });
-      if (tab === 'review') {
+      for (const t of TABS) {
+        $(`tab-${t}`).classList.toggle('hidden', t !== tab);
+        $(`nav-${t}`).className = t === tab ? CLS.navActive : CLS.navIdle;
+      }
+      if (tab === 'review' && !skipBuild) {
         syncReviewStoryDropdown();
         buildReviewQueue();
       }
     }
 
     function adjustFontSize(delta) {
-      const root = document.documentElement;
-      const current = parseFloat(getComputedStyle(root).getPropertyValue('--reader-font-size')) || 1.15;
-      const next = Math.min(1.6, Math.max(0.95, current + delta));
-      root.style.setProperty('--reader-font-size', `${next}rem`);
+      const current = typeof prefs.fontSize === 'number'
+        ? prefs.fontSize
+        : (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--reader-font-size')) || 1.15);
+      prefs.fontSize = Math.round(Math.min(1.6, Math.max(0.95, current + delta)) * 100) / 100;
+      applyPrefs();
+      savePrefs();
     }
 
     function toggleTheme() {
-      document.documentElement.classList.toggle('dark');
+      prefs.theme = document.documentElement.classList.contains('dark') ? 'light' : 'dark';
+      applyPrefs();
+      savePrefs();
     }
 
     window.addEventListener('DOMContentLoaded', initApp);
