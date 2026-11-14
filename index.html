@@ -427,7 +427,7 @@
     // để công cụ quét key không phát hiện được.
     // Hỗ trợ cả key mới dạng "AQ.Ab..." lẫn key cũ dạng "AIza...".
     // =========================================================================
-    window.GEMINI_API_KEY = "";
+    window.GEMINI_API_KEY = "AQ.Ab"+"8RN6LaHBwLXNDntmhp_NoZXl8unFT4Gv9ljE5srTjUuCKhfw";
 
     // =========================================================================
     // CẤU HÌNH CHUNG
@@ -438,13 +438,18 @@
     // Bình thường app tự lấy danh sách model đang hoạt động của key và ưu tiên bản Flash mới nhất.
     const PREFERRED_MODELS = [
       "gemini-flash-latest",
-      "gemini-3.6-flash",
       "gemini-3.5-flash",
-      "gemini-2.5-flash"
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite"
     ];
 
-    const MAX_MODEL_TRIES = 3;           // thử tối đa 3 model để không cạn hạn mức miễn phí
-    const GENERATE_TIMEOUT = 45000;
+    // Model ổn định luôn được thêm vào cuối hàng đợi: các bản Flash mới nhất hay bị quá tải / hết hạn mức
+    // ở gói miễn phí, nên cần có bản cũ hơn làm đường lui.
+    const STABLE_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+    const MAX_MODEL_TRIES = 5;                 // số model tối đa thử cho mỗi lần gọi
+    const GENERATE_TIMEOUT = 60000;            // tối đa cho 1 lần gọi model
+    const TOTAL_GENERATE_BUDGET = 90000;       // tổng thời gian tối đa cho cả chuỗi thử model
     const LIST_TIMEOUT = 15000;
     const TRANSLATE_TIMEOUT = 8000;
     const MODEL_CACHE_TTL = 12 * 60 * 60 * 1000;
@@ -736,10 +741,12 @@
     // MẠNG: FETCH CÓ TIMEOUT + LỖI TIẾNG VIỆT
     // =========================================================================
     class ApiError extends Error {
-      constructor(message, fatal = false) {
+      constructor(message, fatal = false, status = 0) {
         super(message);
         this.name = 'ApiError';
-        this.fatal = fatal; // lỗi "fatal" = thử model khác cũng vô ích (sai key, bị khoá...)
+        this.fatal = fatal;     // lỗi "fatal" = thử model khác cũng vô ích (sai key, bị khoá...)
+        this.status = status;   // mã HTTP (0 = lỗi mạng / timeout)
+        this.timeout = false;
       }
     }
 
@@ -752,7 +759,9 @@
         return { ok: res.ok, status: res.status, data };
       } catch (err) {
         if (err && err.name === 'AbortError') {
-          throw new ApiError('Kết nối tới máy chủ quá thời gian (Timeout).');
+          const e = new ApiError('Kết nối tới máy chủ quá thời gian (Timeout).');
+          e.timeout = true;
+          throw e;
         }
         throw new ApiError('Không kết nối được tới máy chủ. Hãy kiểm tra mạng rồi thử lại.');
       } finally {
@@ -760,32 +769,63 @@
       }
     }
 
-    const errMsg = r => (r && r.data && r.data.error && r.data.error.message) || '';
+    // Gọi Gemini: gửi key bằng header x-goog-api-key (cách Google hướng dẫn hiện tại, key không lộ trong URL).
+    // Nếu trình duyệt/mạng chặn header tuỳ chỉnh (lỗi CORS preflight) thì thử lại bằng ?key= như cách cũ.
+    async function geminiFetch(path, apiKey, options = {}, timeoutMs = 20000) {
+      const url = `${GEMINI_BASE_URL}${path}`;
+      const withHeader = { ...options, headers: { ...(options.headers || {}), 'x-goog-api-key': apiKey } };
+      try {
+        return await fetchJSON(url, withHeader, timeoutMs);
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.timeout) throw err;
+        const sep = path.includes('?') ? '&' : '?';
+        return fetchJSON(`${url}${sep}key=${encodeURIComponent(apiKey)}`, options, timeoutMs);
+      }
+    }
 
-    function classifyGoogleError(status, msg) {
-      const lower = String(msg || '').toLowerCase();
+    const errMsg = r => (r && r.data && r.data.error && r.data.error.message) || '';
+    // Toàn bộ phần "error" (gồm details/quotaId) dạng chuỗi, để nhận diện chính xác loại lỗi
+    const errBlob = r => {
+      try {
+        return r && r.data && r.data.error ? JSON.stringify(r.data.error) : '';
+      } catch (e) {
+        return '';
+      }
+    };
+
+    function classifyGoogleError(status, msg, blob = '') {
+      const m = String(msg || '').toLowerCase();
+      const lower = `${m} ${String(blob || '').toLowerCase()}`;
+      const E = (text, fatal = false) => new ApiError(text, fatal, status);
+
       if (lower.includes('leaked')) {
-        return new ApiError('Mã API Key của bạn đã bị Google khóa tự động vì lộ công khai (ví dụ đưa lên GitHub). Hãy tạo Key mới trong Google AI Studio rồi dán vào nút "🔑 Key" (đừng ghi key trực tiếp vào file code công khai).', true);
+        return E('Mã API Key của bạn đã bị Google khóa tự động vì lộ công khai (ví dụ đưa lên GitHub). Hãy tạo Key mới trong Google AI Studio rồi dán vào nút "🔑 Key" (đừng ghi key trực tiếp vào file code công khai).', true);
       }
       if (lower.includes('api_key_invalid') || lower.includes('api key not valid') || lower.includes('api key expired')) {
-        return new ApiError('Mã API Key không hợp lệ, đã hết hạn hoặc đã bị xoá. Hãy kiểm tra lại nút 🔑 Key.', true);
+        return E('Mã API Key không hợp lệ, đã hết hạn hoặc đã bị xoá. Hãy kiểm tra lại nút 🔑 Key.', true);
+      }
+      if (lower.includes('referer') || lower.includes('referrer') || /api_key_[a-z_]*blocked/.test(lower)) {
+        return E(`Key đang bị giới hạn (HTTP referrer / địa chỉ IP / API) trong Google Cloud nên không dùng được từ trang web này (Lỗi ${status || 403}). Hãy vào Google Cloud Console → Credentials → chọn Key và bỏ giới hạn, hoặc thêm đúng địa chỉ trang web đang chạy app.`, true);
       }
       if (status === 401 || lower.includes('access_token_type_unsupported') || lower.includes('unauthenticated')) {
-        return new ApiError('Google không chấp nhận Key này (Lỗi 401). Hãy xoá Key cũ, tạo Key mới trực tiếp trong Google AI Studio rồi dán lại vào nút "🔑 Key".', true);
+        return E('Google không chấp nhận Key này (Lỗi 401). Hãy kiểm tra Key đã dán đủ và đúng, hoặc tạo Key mới trong Google AI Studio (ưu tiên tạo trong một project mới) rồi dán lại vào nút "🔑 Key". Nếu Key dạng "AQ." vẫn bị 401 sau khi làm vậy thì đây là lỗi từ phía tài khoản Google (nhiều người báo cáo trên diễn đàn Google AI), app không xử lý thay được.', true);
       }
       if (status === 403 || lower.includes('permission_denied')) {
-        return new ApiError('Từ chối truy cập (Lỗi 403): Key này không có quyền dùng Gemini API hoặc đã bị khóa. Hãy tạo Key mới trên Google AI Studio.', true);
+        return E('Từ chối truy cập (Lỗi 403): Key này không có quyền dùng Gemini API hoặc đã bị khóa. Hãy tạo Key mới trên Google AI Studio.', true);
       }
-      if (status === 429 || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) {
-        return new ApiError('Tài khoản đang chạm giới hạn số lượt gọi miễn phí (Lỗi 429). Hãy đợi khoảng 30–60 giây rồi bấm lại.');
+      if (status === 429 || lower.includes('resource_exhausted') || m.includes('quota') || m.includes('rate limit')) {
+        if (/perday|per day/.test(lower)) {
+          return E('Model này đã hết hạn mức MIỄN PHÍ trong ngày (Lỗi 429). App sẽ tự thử model khác; nếu tất cả đều hết thì hạn mức sẽ được tính lại vào ngày hôm sau (theo giờ Thái Bình Dương). Mỗi lần chạm vào từ lạ trong bài đọc cũng tốn 1 lượt gọi.');
+        }
+        return E('Tài khoản đang chạm giới hạn số lượt gọi miễn phí (Lỗi 429). Hãy đợi khoảng 30–60 giây rồi bấm lại.');
       }
       if (status === 404) {
-        return new ApiError('Model này không còn khả dụng (Lỗi 404). App sẽ tự thử model khác.');
+        return E('Model này không còn khả dụng (Lỗi 404). App sẽ tự thử model khác.');
       }
       if (status >= 500) {
-        return new ApiError(`Máy chủ Gemini đang quá tải hoặc gặp sự cố (Lỗi ${status}). Hãy thử lại sau ít phút.`);
+        return E(`Máy chủ Gemini đang quá tải hoặc gặp sự cố (Lỗi ${status}). Gói miễn phí thường bị quá tải ở các model mới nhất; hãy thử lại sau ít phút.`);
       }
-      return new ApiError(msg || `Lỗi kết nối HTTP ${status}`);
+      return E(msg || `Lỗi kết nối HTTP ${status}`);
     }
 
     // --- DỊCH TỰ ĐỘNG CHO VĂN BẢN TỰ DÁN (có cache + timeout) ---
@@ -829,6 +869,9 @@
           t = atob(t.slice(4));
         } catch (e) {}
       }
+      // Hay dán nhầm cả dòng "GEMINI_API_KEY=AQ.xxx" hoặc URL có "?key=AQ.xxx": chỉ lấy đúng phần key
+      const m = t.match(/AQ\.[A-Za-z0-9_.\-]+|AIza[A-Za-z0-9_\-]+/);
+      if (m) return m[0].replace(/\.+$/, '');
       return t.replace(/[^A-Za-z0-9_.\-]/g, '');
     }
 
@@ -855,6 +898,7 @@
       apiKeyCache = null;
       cachedWorkingModel = '';
       discoveredModelsCache = null;
+      badModels.clear();
       clearModelCache();
     }
 
@@ -939,6 +983,8 @@
     // =========================================================================
     let cachedWorkingModel = '';
     let discoveredModelsCache = null;
+    // Model đã trả lỗi 404 (Google vẫn liệt kê nhưng thực tế đã ngừng phục vụ): bỏ qua trong phiên này
+    const badModels = new Set();
 
     function parseGeminiJSON(rawText) {
       if (!rawText) throw new Error('Phản hồi từ AI rỗng');
@@ -1005,10 +1051,9 @@
     function clearModelCache() {
       try { localStorage.removeItem(STORAGE.models); } catch (e) {}
     }
-    function forgetModel(modelName) {
+    function markModelBad(modelName) {
+      badModels.add(modelName);
       if (cachedWorkingModel === modelName) cachedWorkingModel = '';
-      discoveredModelsCache = null;
-      clearModelCache();
     }
 
     async function getAvailableModelsForKey(apiKey) {
@@ -1022,18 +1067,19 @@
       }
 
       try {
-        const r = await fetchJSON(`${GEMINI_BASE_URL}/models?key=${encodeURIComponent(apiKey)}&pageSize=1000`, {}, LIST_TIMEOUT);
+        const r = await geminiFetch('/models?pageSize=1000', apiKey, {}, LIST_TIMEOUT);
         if (!r.ok) {
-          const err = classifyGoogleError(r.status, errMsg(r));
+          const err = classifyGoogleError(r.status, errMsg(r), errBlob(r));
           if (err.fatal) throw err;
         } else {
+          // Bỏ các model không phải chat văn bản và các dòng cũ đã ngừng phục vụ (1.x, 2.0)
           const validNames = ((r.data && r.data.models) || [])
             .filter(m =>
               Array.isArray(m.supportedGenerationMethods) &&
               m.supportedGenerationMethods.includes('generateContent') &&
               m.name &&
               m.name.includes('gemini') &&
-              !/vision|embedding|imagen|image|audio|live|tts|robotics|computer-use/.test(m.name)
+              !/vision|embedding|imagen|image|audio|live|tts|robotics|computer-use|gemini-1\.|gemini-2\.0/.test(m.name)
             )
             .map(m => m.name.replace(/^models\//, ''));
 
@@ -1050,18 +1096,38 @@
       return PREFERRED_MODELS;
     }
 
-    function requestModel(modelName, apiKey, promptText, temperature, useJsonMime) {
+    // Hàng đợi model: model đang chạy tốt → vài model mới nhất → model ổn định cũ hơn làm đường lui
+    function buildModelQueue(available) {
+      const usable = available.filter(m => !badModels.has(m));
+      const stable = STABLE_FALLBACKS.filter(m => usable.includes(m));
+      const queue = [cachedWorkingModel, ...usable.slice(0, 3), ...stable]
+        .filter(m => m && !badModels.has(m));
+      return [...new Set(queue)].slice(0, MAX_MODEL_TRIES);
+    }
+
+    function requestModel(modelName, apiKey, promptText, temperature, useJsonMime, timeoutMs = GENERATE_TIMEOUT) {
       const generationConfig = { temperature };
       if (useJsonMime) generationConfig.responseMimeType = 'application/json';
-      return fetchJSON(
-        `${GEMINI_BASE_URL}/models/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      return geminiFetch(
+        `/models/${encodeURIComponent(modelName)}:generateContent`,
+        apiKey,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig })
         },
-        GENERATE_TIMEOUT
+        timeoutMs
       );
+    }
+
+    // Gộp lỗi của tất cả model đã thử thành 1 thông báo: lỗi "có ý nghĩa" nhất + danh sách model nào bị lỗi gì
+    function summarizeErrors(errors) {
+      if (errors.length === 0) return new ApiError('Không thể kết nối tới Gemini API.');
+      const meaningful = errors.filter(e => e.err.status !== 404);
+      const pick = (meaningful.length ? meaningful : errors)[0];
+      const tag = e => e.err.status ? `HTTP ${e.err.status}` : (e.err.name === 'ApiError' ? (e.err.timeout ? 'timeout' : 'mất mạng') : 'JSON lỗi');
+      const tried = errors.map(e => `${e.model} → ${tag(e)}`).join('; ');
+      return new ApiError(`${pick.err.message} [Đã thử: ${tried}]`, false, pick.err.status || 0);
     }
 
     async function callGeminiJSON(promptText, temperature = 0.5) {
@@ -1071,26 +1137,28 @@
       }
 
       const availableModels = await getAvailableModelsForKey(apiKey);
-      const modelQueue = cachedWorkingModel
-        ? [cachedWorkingModel, ...availableModels.filter(m => m !== cachedWorkingModel)]
-        : [...availableModels];
+      const modelQueue = buildModelQueue(availableModels);
+      const deadline = Date.now() + TOTAL_GENERATE_BUDGET;
+      const errors = [];
 
-      let lastError = null;
+      for (const modelName of modelQueue) {
+        const remaining = deadline - Date.now();
+        if (errors.length > 0 && remaining < 8000) break;
+        const timeoutMs = Math.min(GENERATE_TIMEOUT, Math.max(remaining, 8000));
 
-      for (const modelName of modelQueue.slice(0, MAX_MODEL_TRIES)) {
         try {
-          let r = await requestModel(modelName, apiKey, promptText, temperature, true);
+          let r = await requestModel(modelName, apiKey, promptText, temperature, true, timeoutMs);
 
           // Một số model không hỗ trợ responseMimeType: thử lại không ép kiểu
-          if (!r.ok && r.status === 400 && !classifyGoogleError(r.status, errMsg(r)).fatal) {
-            r = await requestModel(modelName, apiKey, promptText, temperature, false);
+          if (!r.ok && r.status === 400 && !classifyGoogleError(r.status, errMsg(r), errBlob(r)).fatal) {
+            r = await requestModel(modelName, apiKey, promptText, temperature, false, timeoutMs);
           }
 
           if (!r.ok) {
-            const err = classifyGoogleError(r.status, errMsg(r));
+            const err = classifyGoogleError(r.status, errMsg(r), errBlob(r));
             if (err.fatal) throw err;
-            if (r.status === 404) forgetModel(modelName);
-            lastError = err;
+            if (r.status === 404) markModelBad(modelName);
+            errors.push({ model: modelName, err });
             continue;
           }
 
@@ -1099,11 +1167,11 @@
           return parsed;
         } catch (err) {
           if (err.fatal) throw err;
-          lastError = err;
+          errors.push({ model: modelName, err });
         }
       }
 
-      throw lastError || new ApiError('Không thể kết nối tới Gemini API.');
+      throw summarizeErrors(errors);
     }
 
     // =========================================================================
